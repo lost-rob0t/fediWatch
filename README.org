@@ -3,6 +3,8 @@
 Fedi watch a OSINT tool to monitor posts on a instance
 * Install FediWatch
 ***NOTE*** FEDIWATCH IS A STARINTEL BOT, PLEASE CONFIGURE STARINTEL BEFORE OPENING ANY ISSUES.
+
+
 Nimble inside project root
 #+begin_src shell
 nimble install
