@@ -9,7 +9,7 @@ nimble install
 Via docker
 
 #+begin_src shell
-docker built . -t fediWatch
+docker build . -t fediWatch
 #+end_src
 
 Edit the example-.env values that configure the bot
