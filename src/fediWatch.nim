@@ -135,7 +135,8 @@ proc mainLoop(client: FediWatch, couchHost, couchUser, couchPass, database: stri
   var db = newCouchDBClient(host=couchHost, port=couchPort)
   echo db.cookieAuth(couchUser, couchPass)
   var docs: Table[string, JsonNode]
-  while true:
+  var error = false
+  while error != true:
     try:
       var timeline = client.getTimeline()
       timeline.parsePosts(docs, client.config.dataset)
@@ -152,14 +153,11 @@ proc mainLoop(client: FediWatch, couchHost, couchUser, couchPass, database: stri
       echo db.cookieAuth(couchUser, couchPass)
     except OSError:
       echo "Error cant find Host: ", client.client.baseUrl
-      if docs.len != 0:
-        db.insertDocs(docs, database)
-        docs.clear
-        break
+      error = true # stop connecting
     if docs.len == 100:
       db.insertDocs(docs, database)
       docs.clear
-    sleep(50)
+    sleep(300)
 proc main()  =
   var db = newCouchDBClient(host=getEnv("COUCH_HOST"), port=getEnv("COUCH_PORT").parseInt)
   discard db.cookieAuth(getEnv("COUCH_USER"), getEnv("COUCH_PASSWORD"))
