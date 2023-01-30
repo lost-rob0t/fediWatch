@@ -75,7 +75,7 @@ proc parseUser*(user: JsonNode, dataset: string): BookerUsername =
   doc.date_updated = doc.date_added
   doc.dataset = dataset
   result = doc
-proc parsePost*(data: JsonNode, dataset: string): BookerSocialMPost =
+proc parsePost*(data: JsonNode, dataset: string): BookerSocialMPost  =
   let content = data["content"].getStr
   let user = data["account"].parseUser(dataset)
   let url = data["uri"].getStr
@@ -95,55 +95,71 @@ proc parsePost*(data: JsonNode, dataset: string): BookerSocialMPost =
   doc.date_added = parseTime(data["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
   doc.date_updated = doc.date_added
   result = doc
-
-proc getPostsId*(posts: var Table[int64, JsonNode], data: var seq[JsonNode], key: int64): seq[JsonNode] =
+proc getPostsId*(posts: var Table[int64, JsonNode], key: int64): seq[JsonNode] =
   for value in posts.mvalues:
     if value{"in_reply_to_id"}.getBiggestInt() == key:
       result.add(value)
 
   
-proc parsePosts*(posts: var Table[int64, JsonNode], docs: var seq[BookerSocialMPost], dataset: string)  =
+proc parsePosts*(posts: var Table[int64, JsonNode], docs: var Table[string, JsonNode], dataset: string)  =
   for key in posts.keys:
     var doc = posts[key].parsePost(dataset)
-    var jdocs: seq[JsonNode]
     # Base Case, there is no replyTo so we add it and delete the key
     if posts[key]{"reply_to_id"}.getBiggestInt(0) == 0:
-      let replies = posts.getPostsId(jdocs, key)
+      let replies = posts.getPostsId(key)
       for p in replies:
         doc.replies.add(p.parsePost(dataset)) # add it as a subobject
-        docs.add(p.parsePost(dataset)) # add it to toplevel
-proc insertDocs(db: CouchDBClient, docs: seq[BookerSocialMPost], database: string) =
-  for doc in docs:
     var jdoc = %*doc
     jdoc{"_id"} = newJString(doc.id)
     jdoc.delete("id")
+    if docs.hasKey(doc.id) != true:
+      docs[doc.id] = jdoc
+
+
+proc insertDocs(db: CouchDBClient, docs: var Table[string, JsonNode], database: string) =
+  var jdocs: seq[JsonNode]
+  for doc in docs.mvalues:
+    jdocs.add(doc)
+  try:
+    let resp = db.bulkDocs(database, %jdocs)
+  except CouchDBError:
+    # insert failed, try again but insert each one by itself
     try:
-      let resp =  db.createDoc(database, jdoc)
+      for doc in jdocs:
+        let resp = db.createDoc(database, doc)
     except CouchDBError:
-      discard # ignore duplicate posts
+      #ignore the error
+      discard
 proc mainLoop(client: FediWatch, couchHost, couchUser, couchPass, database: string, couchPort: int): void {.thread.} =
   echo client.client.baseUrl
   var db = newCouchDBClient(host=couchHost, port=couchPort)
   echo db.cookieAuth(couchUser, couchPass)
+  var docs: Table[string, JsonNode]
   while true:
-    var docs: seq[BookerSocialMPost]
-    try :
+    try:
       var timeline = client.getTimeline()
       timeline.parsePosts(docs, client.config.dataset)
-      db.insertDocs(docs, database)
     except FediError as e:
       echo e.info
       echo client.client.baseUrl
     except ValueError:
       discard
-    except IOError:
+    except IOError as e:
+      echo docs.len
       echo "connection error"
+      echo client.client.baseUrl
       db = newCouchDBClient(host=couchHost, port=couchPort)
       echo db.cookieAuth(couchUser, couchPass)
-    except IndexError:
-      discard
-
- 
+    except OSError:
+      echo "Error cant find Host: ", client.client.baseUrl
+      if docs.len != 0:
+        db.insertDocs(docs, database)
+        docs.clear
+        break
+    if docs.len == 100:
+      db.insertDocs(docs, database)
+      docs.clear
+    sleep(50)
 proc main()  =
   var db = newCouchDBClient(host=getEnv("COUCH_HOST"), port=getEnv("COUCH_PORT").parseInt)
   discard db.cookieAuth(getEnv("COUCH_USER"), getEnv("COUCH_PASSWORD"))
