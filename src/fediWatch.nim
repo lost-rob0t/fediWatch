@@ -154,7 +154,7 @@ proc mainLoop(client: FediWatch, couchHost, couchUser, couchPass, database: stri
     except OSError:
       echo "Error cant find Host: ", client.client.baseUrl
       error = true # stop connecting
-    if docs.len == 100:
+    if docs.len == 10:
       db.insertDocs(docs, database)
       docs.clear
     sleep(300)
