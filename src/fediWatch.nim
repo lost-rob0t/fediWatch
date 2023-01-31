@@ -9,6 +9,7 @@ import times
 import tables
 import asyncdispatch
 import threadpool
+import httpclient
 type
   FediWatch = object
     client: FediClient
@@ -154,6 +155,8 @@ proc mainLoop(client: FediWatch, couchHost, couchUser, couchPass, database: stri
     except OSError:
       echo "Error cant find Host: ", client.client.baseUrl
       error = true # stop connecting
+    except ProtocolError:
+      echo "Error with host: ", client.client.baseUrl
     if docs.len == 10:
       db.insertDocs(docs, database)
       docs.clear
