@@ -1,0 +1,9 @@
+FROM nimlang/nim as builder
+RUN apt-get install musl-tools -y
+COPY fediwatch.nimble ./
+RUN nimble install -y --depsOnly
+COPY ./src ./src
+RUN nim --gcc.exe:musl-gcc --gcc.linkerexe:musl-gcc --passL:-static c --threads:on src/fediWatch.nim
+FROM alpine
+COPY --from=builder src/fediWatch ./
+CMD ["/fediWatch"]

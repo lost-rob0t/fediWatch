@@ -1,0 +1,27 @@
+#+title: Readme
+* About
+Fedi watch a OSINT tool to monitor posts on a instance
+* Install FediWatch
+***NOTE*** FEDIWATCH IS A STARINTEL BOT, PLEASE CONFIGURE STARINTEL BEFORE OPENING ANY ISSUES.
+
+
+Nimble inside project root
+#+begin_src shell
+nimble install
+#+end_src
+
+Via docker
+
+#+begin_src shell
+docker build . -t fediWatch
+#+end_src
+
+Edit the example-.env values that configure the bot
+you can pass them in like this
+#+begin_src shell
+sudo docker run --env-file <path to env file> fediwatch:latest
+#+end_src
+
+* TODO [0/2]
++ [ ] user scraping
++ [ ] account watching

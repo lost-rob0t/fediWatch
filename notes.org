@@ -1,0 +1,5 @@
+* Inbox
+** [2023-01-29 Sun 23:04] Using a table to dedpulicate
+i should try to use tables to store documents and using the id as key so there are no duplicated documents
+
+[[file:~/Documents/Projects/starintel/bots/fediWatch/src/fediWatch.nim::posts\[doc.id\] = jdoc]]
