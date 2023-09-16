@@ -1,70 +1,89 @@
-import starintel
-import json, jsony
-import mycouch
+import starRouter
+import starintel_doc except newMessage
+import jsony
 import fedi
-import cligen
-import os
-import strutils
+import json
+import lrucache
+import asyncdispatch
+import httpcore
+import httpclient
+import deques, asyncdispatch
 import times
 import tables
-import asyncdispatch
-import httpclient
-import shabbo
+import strformat
+import strutils
+import cligen
+import md5
 type
   FediWatch = object
     client: AsyncFediClient
     config: Target
-# TODO load this from a settings and make it random
+  ResourcePool*[T] = ref object
+    resources: Deque[T]
+    queuers: Deque[Future[T]]
+
+  AsyncHttpClientPool* = ResourcePool[AsyncHttpClient]
+
+proc dequeue*[T](pool: ResourcePool[T]): Future[T] =
+  result = newFuture[T]("dequeue")
+  if pool.resources.len == 0:
+    pool.queuers.addLast result
+  else:
+    result.complete pool.resources.popFirst()
+
+proc enqueue*[T](pool: ResourcePool[T], item: T) =
+  if pool.queuers.len > 0:
+    let fut = pool.queuers.popFirst()
+    fut.complete(item)
+  else:
+    pool.resources.addLast(item)
+
+
+
+proc newAsyncHttpClientPool*(size: int): AsyncHttpClientPool =
+  result.new()
+  for i in 1..size: result.enqueue(newAsyncHttpClient())
+
+
 const USER_AGENT =  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-proc loadTargets*(db: CouchDBClient, database: string): seq[Target] =
-  let resp = db.find("targets", %*{"selector":
-                                    {"actor":
-                                      {"$eq":"fediWatch"}}})
-  echo $resp
-  var r: seq[Target]
-  for target in resp["docs"].getElems:
-    var jdoc = target
-    jdoc["id"] = target["_id"]
-    r.add(target.to(Target))
-  result = r
-  echo r.len
 
-proc initFediWatch(targets: seq[Target]): seq[FediWatch] =
-  var r: seq[FediWatch]
-  let proxy = getEnv("HTTP_PROXY")
-  for target in targets:
-    let token = target.options{"auth"}.getStr("")
-    let ua = target.options{"ua"}.getStr(USER_AGENT)
-    let client = newAsyncFediClient(host=target.target, token = token, userAgent=ua)
-    r.add(FediWatch(config: target, client: client))
-  result = r
 
-proc getReplies(fediw: FediWatch, data: JsonNode): Future[Table[int64, JsonNode]] {.async.} =
-  # Get replies in a recursive manner
-  # Base case is no reply_to_id which will add the current data.
-  var replies: Table[int64, JsonNode]
-  replies[data["id"].getBiggestInt(0)] = data
-  let replyId = data{"in_reply_to_id"}.getInt(0)
-  if replyId != 0:
-    let reply = await fediw.client.getStatus(replyId)
-    replies[reply["id"].getBiggestInt()] = reply
-    # Call this function again and add the results
-    let rtable = await fediw.getReplies(reply)
-    for key in rtable.keys:
-      echo "adding replies!"
-      replies[key] = rtable[key]
-    replies[reply["id"].getBiggestInt()] = reply
-  result = replies
+proc filterTarget[T](doc: proto.Message[T]): bool =
+  if doc.topic == "fediwatch":
+    return true
 
-proc getTimeline(fediw: FediWatch): Future[Table[int64, JsonNode]] {.async.} =
-  var r: seq[JsonNode]
-  let timeline = await fediw.client.getTimeline()
-  var replies: Table[int64, JsonNode]
-  for doc in timeline.getElems:
-    let rtable = await fediw.getReplies(doc)
-    for key in rtable.keys:
-      replies[key] = rtable[key]
-  result = replies
+
+# NOTE maybe the client should be set from a resource pool?
+proc initAsyncFedi*(target: Target): AsyncFediClient =
+  let token = target.options{"auth"}.getStr("")
+  let ua = target.options{"ua"}.getStr(USER_AGENT)
+  result = newAsyncFediClient(host=target.target, token = token, userAgent=ua)
+
+
+proc initFediWatch*(target: Target): FediWatch =
+  result.client = initAsyncFedi(target)
+  result.config = target
+
+
+proc parseFediUsername*(user: string): (string, string) =
+  let data = user.split("@")
+  result = (username: data[0], domain: data[1])
+
+
+proc getHttpClient(pool: AsyncHttpClientPool): Future[AsyncHttpClient] {.async.} =
+  var client = await pool.dequeue()
+  defer: pool.enqueue client
+  return client
+
+
+proc checkUser(client: AsyncHttpClient, username: string): Future[bool] {.async.} =
+  let resp = await client.get(username.webfingerUser("https"))
+  if resp.status == Http200:
+    result = true
+
+
+proc getUserInfo(client: AsyncFediClient, username: string): Future[JsonNode] {.async.} =
+  result = await client.lookupAccount(username)
 
 
 proc parseUser*(user: JsonNode, dataset: string): Username =
@@ -75,139 +94,106 @@ proc parseUser*(user: JsonNode, dataset: string): Username =
   for extra in user["fields"].getElems:
     doc.misc.add(extra)
   doc.date_added = parseTime(user["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
-  doc.date_updated = doc.date_added
+  doc.date_updated = now().toTime().toUnix
   doc.dataset = dataset
   result = doc
-proc parsePost*(data: JsonNode, dataset: string): SocialMPost  =
-  let content = data["content"].getStr
-  let user = data["account"].parseUser(dataset)
-  let url = data["uri"].getStr
-  var doc = user.newPost(content, url = url)
 
-  for tag in data["tags"].getElems:
-    doc.tags.add(tag.getStr)
 
-  for media in data["media_attachments"].getElems:
-    doc.media.add(media["url"].getStr)
-
-  # TODO extract links
-
-  doc.replyCount = data{"replies_count"}.getInt(0)
-  doc.repostCount = data{"reblogs_count"}.getInt(0)
-  doc.dataset = dataset
-  doc.date_added = parseTime(data["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
-  doc.date_updated = doc.date_added
-  result = doc
-proc getPostsId*(posts: var Table[int64, JsonNode], key: int64): seq[JsonNode] =
-  for value in posts.mvalues:
-    if value{"in_reply_to_id"}.getBiggestInt() == key:
-      result.add(value)
-
-  
-proc parsePosts*(posts: var Table[int64, JsonNode], docs: var Table[string, JsonNode], dataset: string)  =
-  for key in posts.keys:
-    var doc = posts[key].parsePost(dataset)
-    # Base Case, there is no replyTo so we add it and delete the key
-    if posts[key]{"reply_to_id"}.getBiggestInt(0) == 0:
-      let replies = posts.getPostsId(key)
-      for p in replies:
-        doc.replies.add(p.parsePost(dataset)) # add it as a subobject
-    var jdoc = %*doc
-    jdoc{"_id"} = newJString(doc.id)
-    jdoc.delete("id")
-    if docs.hasKey(doc.id) != true:
-      docs[doc.id] = jdoc
-
-proc updateDoc(db: AsyncCouchDBClient, database: string, doc: JsonNode) {.async.} =
-  var old: JsonNode
-  var new = doc
-  if doc["_rev"].getStr().len != 0:
-    old = await db.getDoc(database, doc["_id"].getStr, doc["_rev"].getStr)
-    defer: db.hc.close()
+proc handleUser(routerClient: Client, httpClient: AsyncHttpClient,  checkCache: LruCache[string, bool], userCache: LruCache[string, JsonNode], target: Target) {.async.} =
+  # Handles the incoming user targets
+  var
+    accountID = 0
+    userExists = false
+    fedi: AsyncFediClient
+  # TODO insert debug log
+  if checkCache.contains(target.target):
+    userExists = checkCache[target.target]
   else:
-    old = await db.getDoc(database, doc["_id"].getStr)
-    defer: db.hc.close()
-  new["_rev"] = old["_rev"]
-  let resp = await db.createOrUpdateDoc(database, new["_id"].getStr, new["_rev"].getStr, new)
-  defer: db.hc.close()
-proc insertDocs(db: AsyncCouchDBClient, docs: Table[string, JsonNode], database: string) {.async.} =
-  var jdocs: seq[JsonNode]
-  for doc in docs.keys:
-    jdocs.add(docs[doc])
-  try:
-    let resp = await db.bulkDocs(database, %jdocs)
-    defer: db.hc.close()
-  except CouchDBError:
-    # insert failed, try again but insert each one by itself
-    try:
-      for doc in jdocs:
-        await db.updateDoc(database, doc)
-        defer: db.hc.close()
-    except CouchDBError:
-      #ignore the error
-      discard
-    except ProtocolError:
-      discard
+    userExists = await httpClient.checkUser(target.target)
 
+  # TODO insert debug log
+  checkCache[target.target] = userExists
 
-
-proc mainLoop(clients: seq[FediWatch], couchHost, couchUser, couchPass, database: string, couchPort: int) {.async.} =
-  var db: AsyncCouchDBClient
-  try:
-    echo "function loop login"
-    db = newAsyncCouchDBClient(host=couchHost, port=couchPort)
-    echo await db.cookieAuth(couchUser, couchPass)
-  except CouchDBError as e:
-    echo e.info
-  var docs: Table[string, JsonNode]
-  while true:
-    for client in clients:
-      try:
-        client.client.hc = newAsyncHttpClient()
-        var timeline = await client.getTimeline()
-        defer: client.client.hc.close()
-        timeline.parsePosts(docs, client.config.dataset)
-      except FediError as e:
-        echo e.info
-        echo client.client.baseUrl
-      except ValueError:
-        discard
-      except IOError as e:
-        echo docs.len
-        echo "connection error"
-        echo client.client.baseUrl
-        try:
-          db = newAsyncCouchDBClient(host=couchHost, port=couchPort)
-          echo await db.cookieAuth(couchUser, couchPass)
-        except ProtocolError:
-          echo "Couch error!"
-        except OSError:
-          echo "Error cant find Host: ", client.client.baseUrl
-    if docs.len >= 10:
-      echo "inserting"
-      await db.insertDocs(docs, database)
-      docs.clear
-    await sleepAsync(300)
-
-proc main()  =
   let
-    host = getEnv("COUCH_HOST")
-    user = getEnv("COUCH_USER")
-    pass = getEnv("COUCH_PASS")
-    port = getEnv("COUCH_PORT").parseInt
-    targetdb = getEnv("COUCH_TARGETDB")
-    database = getEnv("COUCH_DATABASE")
-  var db: CouchDBClient
-  try:
-    echo "function main login"
-    db = newCouchDBClient(host=host, port=port)
-    echo user
-    echo pass
-    discard db.cookieAuth(user, pass)
-  except CouchDBError as e:
-    echo e.info
-  discard db.cookieAuth(user, pass)
-  let targets = db.loadTargets(database)
-  var clients = initFediWatch(targets=targets)
-  waitFor clients.mainLoop(host, user, pass, database, port)
-main()
+    userData = parseFediUsername(target.target)
+    domain = userData[1]
+    username = userData[0]
+    # User exists, lets procced.
+  if userExists == true:
+    # TODO insert debug log
+    let url = fmt"https://{domain}"
+    var resp: JsonNode
+    if userCache.contains(target.target):
+      resp = userCache[target.target]
+    else:
+      fedi = newAsyncFediClient(host=url, token=target.options{"auth"}.getStr(""))
+      resp = await fedi.getUserInfo(username)
+      userCache[target.target] = resp
+      accountId = resp["id"].getInt(0)
+      var doc = newUsername(resp["username"].getStr(""), domain, resp["url"].getStr(""))
+      doc.dateAdded = resp["created_at"].getStr("").parseMastoTime()
+      doc.upDateTime()
+      for field in resp["fields"].getElems:
+        doc.misc.add(field)
+        doc.dataset = target.dataset
+        # Send the User document off
+      await routerClient.emit(doc.newMessage(EventType.newDocument, routerClient.id, "Username"), EventType.newDocument)
+  # Remove so no leak.
+
+
+
+proc processFeed(fw: FediWatch, routerClient: Client) {.async.} =
+  let timeline = await fw.client.getTimeline()
+  for data in timeline.getElems:
+    var smPost = SocialMPost(dataset: fw.config.dataset)
+    var user = data["account"].parseUser(fw.config.dataset)
+    smPost.user = user.username
+    smPost.content = data["content"].getStr
+    smPost.date_added = parseTime(data["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
+    smPost.date_updated = now().toTime().toUnix()
+    let replyTo = data["in_reply_to_id"].getStr
+    if replyTo.len != 0:
+      smPost.replyTo = $toMD5(replyTo)
+    for media in data["media_attachments"].getElems:
+      smPost.media.add(media["url"].getStr)
+    for tag in data["tags"].getElems:
+      let t = tag.getStr("")
+      if t.len != 0:
+        smPost.tags.add(t)
+    await routerClient.emit(smPost.newMessage(EventType.newDocument, routerClient.id, "SocialMPost"), EventType.newDocument)
+    await routerClient.emit(user.newMessage(EventType.newDocument, routerClient.id, "Username"), EventType.newDocument)
+    await routerClient.emit(newRelation(user.id, smPost.id, note = "", dataset=fw.config.dataset).newMessage(EventType.newDocument, routerClient.id, "Relation"), newDocument)
+
+proc userLoop(routerClient: Client) {.async.} =
+  var routerClient = routerClient
+  var inbox = Message[Target].newInbox(100)
+  var httpPool = newAsyncHttpClientPool(100)
+  var checkCache = newLruCache[string, bool](100)
+  var userCache = newLruCache[string, JsonNode](100)
+  var fedis: seq[FediWatch]
+  var isReady: bool
+  proc handleTarget(doc: proto.Message[Target]) {.async.} =
+    let target = doc.data
+    let typ = target.options{"typ"}.getStr("")
+    var client = await httpPool.getHttpClient()
+    case typ:
+      of "Username":
+        await routerClient.handleUser(client, checkCache, userCache, target)
+      of "Domain":
+        fedis.add(initFediWatch(target))
+        isReady = true
+  inbox.registerCB(handleTarget)
+  inbox.registerFilter(filterTarget)
+  proto.Message[Target].withInbox(routerClient, inbox):
+      for client in fedis:
+        await client.processFeed(routerClient)
+        await sleepAsync(1500)
+
+
+proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp://127.0.0.1:6000") =
+  var client = newClient("fediwatch", subAddress, apiAddress, 10, @[""])
+  client.connect()
+  waitFor client.userLoop()
+
+when isMainModule:
+  dispatch main
