@@ -22,6 +22,7 @@ type
     client: AsyncFediClient
     config: Target
     lastMessage: string
+    t: int64
   FediWatchConfig = object
     logpath: string
     logLevel: string
@@ -172,9 +173,9 @@ proc processFeed(fw: FediWatch, routerClient: Client,  log: AsyncFileLogger) {.a
     await routerClient.emit(smPost.newMessage(EventType.newDocument, routerClient.id, "SocialMPost"), EventType.newDocument)
     await routerClient.emit(user.newMessage(EventType.newDocument, routerClient.id, "Username"), EventType.newDocument)
     await routerClient.emit(newRelation(user.id, smPost.id, note = "", dataset=fw.config.dataset).newMessage(EventType.newDocument, routerClient.id, "Relation"), newDocument)
-
 proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
   var routerClient = routerClient
+  #var threadLoop = connect("inproc://")
   var inbox = Message[Target].newInbox(100)
   var httpPool = newAsyncHttpClientPool(100)
   var checkCache = newLruCache[string, bool](100)
@@ -189,7 +190,7 @@ proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
         await routerClient.handleUser(client, checkCache, userCache, target, log)
       of "Domain":
         fedis.add(initFediWatch(target))
-    echo fedis.len
+        echo fedis.len
     log.info(fmt"Got Target type: {typ}")
     log.info(fmt"Target:{target.target}")
     log.info(fmt"Target Options: {target.options}")
@@ -198,19 +199,22 @@ proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
   proto.Message[Target].withInbox(routerClient, inbox):
       for x in 0..fedis.high:
         try:
-          await fedis[x].processFeed(routerClient, log)
+          if now().toTime().toUnix() >= fedis[x].t:
+             yield fedis[x].processFeed(routerClient, log)
+             fedis[x].t = now().toTime.toUnix() + 1
         except Exception:
           log.error(getCurrentExceptionMsg())
           fedis.delete(x)
-
+      echo "done"
       #await sleepAsync(1500)
+
 
 proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp://127.0.0.1:6000") =
   let level = parseEnum[Level](getEnv("FEDIWATCH_LOG_LEVEL", "lvlInfo"))
   var log = newAsyncFileLogger(filename_tpl=getEnv("FEDIWATCH_LOG", "$appname.$y$MM$dd.log"), flush_threshold=level)
   log.info fmt"starRouter api address: {apiAddress}"
   log.info fmt"starRouter pub/sub address: {subAddress}"
-  var client = newClient("fediwatch", subAddress, apiAddress, 10, @[""])
+  var client = newClient("fediwatch", subAddress, apiAddress, 10_000, @[""])
   client.connect()
   waitFor client.userLoop(log)
 
