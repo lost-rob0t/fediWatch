@@ -9,9 +9,12 @@ Nimble inside project root
 #+begin_src shell
 nimble install
 #+end_src
+If you just want to run it standalone without docker (not reconmended).
+#+begin_src shell
+nimble install https://github.com/lost-rob0t/fediWatch
+#+end_src
 
 Via docker
-
 #+begin_src shell
 docker build . -t fediWatch
 #+end_src
@@ -22,6 +25,22 @@ you can pass them in like this
 sudo docker run --env-file <path to env file> fediwatch:latest
 #+end_src
 
-* TODO [0/2]
-+ [ ] user scraping
+
+Enviroment settings to set
++ FEDIWATCH_LOG defaults to $appname.$y$MM$dd.log
++ FEDIWATCH_LOG_LEVEL defaults to lvlInfo
+  Note when setting the level it has to start with lvl{name} so error would be lvlError, lvlWarn, ect
+
+command line args
+
++ ~-h~ open help
++ ~-s~ set the router subscriber port, should be 6000 by default
++ ~-a~ set the router api port, should be 6001 by default
+
+
+
+* TODO [1/4]
++ [X] user scraping
 + [ ] account watching
++ [ ] Let router url be set by env
++ [ ] Let log level and format be set by args
