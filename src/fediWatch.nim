@@ -173,6 +173,19 @@ proc processFeed(fw: FediWatch, routerClient: Client,  log: AsyncFileLogger) {.a
     await routerClient.emit(smPost.newMessage(EventType.newDocument, routerClient.id, "SocialMPost"), EventType.newDocument)
     await routerClient.emit(user.newMessage(EventType.newDocument, routerClient.id, "Username"), EventType.newDocument)
     await routerClient.emit(newRelation(user.id, smPost.id, note = "", dataset=fw.config.dataset).newMessage(EventType.newDocument, routerClient.id, "Relation"), newDocument)
+
+proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: AsyncFileLogger, t: int64) {.async.} =
+  var futures: seq[Future[void]]
+  if now().toTime().toUnix() >= t:
+    for client in fw:
+      let fut = (client.processFeed(routerClient, log))
+      futures.add(fut)
+      yield fut
+    for fut in futures:
+      try:
+         await fut
+      except Exception:
+         log.error(getCurrentExceptionMsg())
 proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
   var routerClient = routerClient
   #var threadLoop = connect("inproc://")
@@ -190,24 +203,19 @@ proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
         await routerClient.handleUser(client, checkCache, userCache, target, log)
       of "Domain":
         fedis.add(initFediWatch(target))
-        echo fedis.len
     log.info(fmt"Got Target type: {typ}")
     log.info(fmt"Target:{target.target}")
     log.info(fmt"Target Options: {target.options}")
   inbox.registerCB(handleTarget)
   inbox.registerFilter(filterTarget)
+  var last = now().toTime().toUnix()
   proto.Message[Target].withInbox(routerClient, inbox):
-      for x in 0..fedis.high:
-        try:
-          if now().toTime().toUnix() >= fedis[x].t:
-             yield fedis[x].processFeed(routerClient, log)
-             fedis[x].t = now().toTime.toUnix() + 1
-        except Exception:
-          log.error(getCurrentExceptionMsg())
-          fedis.delete(x)
-      echo "done"
-      #await sleepAsync(1500)
-
+    try:
+      await processTimelines(routerClient, fedis, log, last)
+      # Lets be kind, wait a second before sending another batch
+      last = now().toTime().toUnix() + 1
+    except Exception:
+      log.error(getCurrentExceptionMsg())
 
 proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp://127.0.0.1:6000") =
   let level = parseEnum[Level](getEnv("FEDIWATCH_LOG_LEVEL", "lvlInfo"))
