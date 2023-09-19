@@ -209,7 +209,7 @@ proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
   inbox.registerCB(handleTarget)
   inbox.registerFilter(filterTarget)
   var last = now().toTime().toUnix()
-  proto.Message[Target].withInbox(routerClient, inbox):
+  withInbox(routerClient, inbox, proto.Message[Target]):
     try:
       await processTimelines(routerClient, fedis, log, last)
       # Lets be kind, wait a second before sending another batch
