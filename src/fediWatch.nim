@@ -17,6 +17,7 @@ import md5
 import morelogging
 from logging import Level, LevelNames
 from os import getEnv
+import zmq
 type
   FediWatch = ref object
     client: AsyncFediClient
@@ -55,7 +56,7 @@ proc newAsyncHttpClientPool*(size: int): AsyncHttpClientPool =
 const USER_AGENT =  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
 
 
-proc filterTarget[T](doc: proto.Message[T]): bool =
+proc filterTarget(doc: proto.Message[Target]): bool =
   if doc.topic == "fediwatch":
     return true
 
@@ -70,7 +71,7 @@ proc initAsyncFedi*(target: Target): AsyncFediClient =
 proc initFediWatch*(target: Target): FediWatch =
   result = FediWatch(lastMessage: "", config: target, client: initAsyncFedi(target))
 
-proc parseFediUsername*(user: string): (string, string) =
+proc parseFediuser*(user: string): (string, string) =
   let data = user.split("@")
   result = (username: data[0], domain: data[1])
 
@@ -91,16 +92,17 @@ proc getUserInfo(client: AsyncFediClient, username: string): Future[JsonNode] {.
   result = await client.lookupAccount(username)
 
 
-proc parseUser*(user: JsonNode, dataset: string): Username =
+proc parseUser*(user: JsonNode, dataset: string): User =
   let username = user["username"].getStr()
   let url = user["url"].getStr()
-  var doc = newUsername(userName, platform = "fediverse", url)
+  var doc = newuser(userName, platform = "fediverse", url)
   doc.bio = user["note"].getStr
   for extra in user["fields"].getElems:
     doc.misc.add(extra)
   doc.date_added = parseTime(user["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
   doc.date_updated = now().toTime().toUnix
   doc.dataset = dataset
+  doc.setType()
   result = doc
 
 
@@ -120,7 +122,7 @@ proc handleUser(routerClient: Client, httpClient: AsyncHttpClient,  checkCache: 
   checkCache[target.target] = userExists
 
   let
-    userData = parseFediUsername(target.target)
+    userData = parseFediuser(target.target)
     domain = userData[1]
     username = userData[0]
     # User exists, lets procced.
@@ -135,14 +137,15 @@ proc handleUser(routerClient: Client, httpClient: AsyncHttpClient,  checkCache: 
       resp = await fedi.getUserInfo(username)
       userCache[target.target] = resp
       accountId = resp["id"].getInt(0)
-      var doc = newUsername(resp["username"].getStr(""), domain, resp["url"].getStr(""))
+      var doc = newuser(resp["username"].getStr(""), domain, resp["url"].getStr(""))
       doc.dateAdded = resp["created_at"].getStr("").parseTime("yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
       doc.upDateTime()
+      doc.setType()
       for field in resp["fields"].getElems:
         doc.misc.add(field)
         doc.dataset = target.dataset
         # Send the User document off
-      await routerClient.emit(doc.newMessage(EventType.newDocument, routerClient.id, "Username"), EventType.newDocument)
+      await routerClient.emit(doc.newMessage(EventType.newDocument, routerClient.id, "user"))
   # Remove so no leak.
 
 
@@ -155,10 +158,12 @@ proc processFeed(fw: FediWatch, routerClient: Client,  log: AsyncFileLogger) {.a
   for data in posts:
     var smPost = SocialMPost(dataset: fw.config.dataset)
     var user = data["account"].parseUser(fw.config.dataset)
-    smPost.user = user.username
+    smPost.user = user.name
     smPost.content = data["content"].getStr
     smPost.date_added = parseTime(data["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
     smPost.date_updated = now().toTime().toUnix()
+    smPost.makeMD5ID(data["id"].getStr(smPost.content))
+    smPost.setType()
     let replyTo = data["in_reply_to_id"].getStr
     if replyTo.len != 0:
       smPost.replyTo = $toMD5(replyTo)
@@ -169,10 +174,12 @@ proc processFeed(fw: FediWatch, routerClient: Client,  log: AsyncFileLogger) {.a
       if t.len != 0:
         smPost.tags.add(t)
     # incase its not a int?
+    var relation = newRelation(user.id, smPost.id, note = "", dataset=fw.config.dataset)
+    relation.setType()
     fw.lastMessage = data["id"].getStr("")
-    await routerClient.emit(smPost.newMessage(EventType.newDocument, routerClient.id, "SocialMPost"), EventType.newDocument)
-    await routerClient.emit(user.newMessage(EventType.newDocument, routerClient.id, "Username"), EventType.newDocument)
-    await routerClient.emit(newRelation(user.id, smPost.id, note = "", dataset=fw.config.dataset).newMessage(EventType.newDocument, routerClient.id, "Relation"), newDocument)
+    await routerClient.emit(smPost.newMessage(EventType.newDocument, routerClient.id, "SocialMPost"))
+    await routerClient.emit(user.newMessage(EventType.newDocument, routerClient.id, "user"))
+    await routerClient.emit(relation.newMessage(EventType.newDocument, routerClient.id, "Relation"))
 
 proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: AsyncFileLogger, t: int64) {.async.} =
   var futures: seq[Future[void]]
@@ -188,18 +195,18 @@ proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: AsyncFileLo
          log.error(getCurrentExceptionMsg())
 proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
   var routerClient = routerClient
-  #var threadLoop = connect("inproc://")
-  var inbox = Message[Target].newInbox(100)
+  var inbox = Target.newInbox(100)
   var httpPool = newAsyncHttpClientPool(100)
   var checkCache = newLruCache[string, bool](100)
   var userCache = newLruCache[string, JsonNode](100)
   var fedis: seq[FediWatch]
+  var log = log
   proc handleTarget(doc: proto.Message[Target]) {.async.} =
     let target = doc.data
     let typ = target.options{"typ"}.getStr("")
     var client = await httpPool.getHttpClient()
     case typ:
-      of "Username":
+      of "User":
         await routerClient.handleUser(client, checkCache, userCache, target, log)
       of "Domain":
         fedis.add(initFediWatch(target))
@@ -209,7 +216,7 @@ proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
   inbox.registerCB(handleTarget)
   inbox.registerFilter(filterTarget)
   var last = now().toTime().toUnix()
-  withInbox(routerClient, inbox, proto.Message[Target]):
+  Target.withInbox(routerClient, inbox):
     try:
       await processTimelines(routerClient, fedis, log, last)
       # Lets be kind, wait a second before sending another batch
@@ -222,6 +229,7 @@ proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp
   var log = newAsyncFileLogger(filename_tpl=getEnv("FEDIWATCH_LOG", "$appname.$y$MM$dd.log"), flush_threshold=level)
   log.info fmt"starRouter api address: {apiAddress}"
   log.info fmt"starRouter pub/sub address: {subAddress}"
+  # TODO Limit topics to fediwatch or related object types.
   var client = newClient("fediwatch", subAddress, apiAddress, 10_000, @[""])
   client.connect()
   waitFor client.userLoop(log)
