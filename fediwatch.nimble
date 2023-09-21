@@ -1,20 +1,11 @@
 # Package
 
-version     = "0.2.0"
+version     = "0.3.0"
 author      = "nsaspy"
-description = "Parse and handle starintel docs"
-license     = "MIT"
+description = "Watch the entire fediverse and emite starintel messages."
+license     = "LGPL"
 srcDir       = "src"
 bin = @["fediWatch"]
 # Deps
 
-requires "nim >= 1.6.0"
-requires "uuids >= 0.1.11"
-requires "jsony"
-requires "isaac"
-requires "mycouch"
-requires "cligen"
-
-requires "https://github.com/lost-rob0t/fedi.git"
-requires "https://github.com/lost-rob0t/starintel-doc.nim"
-requires "https://github.com/lost-rob0t/starRouter.git"
+requires "nim >= 1.6.0", "mycouch", "cligen", "lrucache", "morelogging", "https://github.com/lost-rob0t/fedi.git", "https://github.com/lost-rob0t/starintel-doc.nim", "https://github.com/lost-rob0t/starRouter.git"
