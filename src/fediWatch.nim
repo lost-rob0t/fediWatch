@@ -93,8 +93,9 @@ proc getUserInfo(client: AsyncFediClient, username: string): Future[JsonNode] {.
 
 
 proc parseUser*(user: JsonNode, dataset: string): User =
-  let username = user["username"].getStr()
-  let url = user["url"].getStr()
+  let
+    username = user["username"].getStr()
+    url = user["url"].getStr()
   var doc = newuser(userName, platform = "fediverse", url)
   doc.bio = user["note"].getStr
   for extra in user["fields"].getElems:
@@ -156,15 +157,17 @@ proc processFeed(fw: FediWatch, routerClient: Client,  log: AsyncFileLogger) {.a
   var posts = timeline.getElems
   log.info fmt"got {posts.len} posts for {fw.config.target}"
   for data in posts:
-    var smPost = SocialMPost(dataset: fw.config.dataset)
-    var user = data["account"].parseUser(fw.config.dataset)
+    var
+      smPost = SocialMPost(dataset: fw.config.dataset)
+      user = data["account"].parseUser(fw.config.dataset)
+
+    let replyTo = data["in_reply_to_id"].getStr
     smPost.user = user.name
     smPost.content = data["content"].getStr
     smPost.date_added = parseTime(data["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
     smPost.date_updated = now().toTime().toUnix()
     smPost.makeMD5ID(data["id"].getStr(smPost.content))
     smPost.setType()
-    let replyTo = data["in_reply_to_id"].getStr
     if replyTo.len != 0:
       smPost.replyTo = $toMD5(replyTo)
     for media in data["media_attachments"].getElems:
@@ -194,16 +197,18 @@ proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: AsyncFileLo
       except Exception:
          log.error(getCurrentExceptionMsg())
 proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
-  var routerClient = routerClient
-  var inbox = Target.newInbox(100)
-  var httpPool = newAsyncHttpClientPool(100)
-  var checkCache = newLruCache[string, bool](100)
-  var userCache = newLruCache[string, JsonNode](100)
-  var fedis: seq[FediWatch]
-  var log = log
+  var
+    routerClient = routerClient
+    inbox = Target.newInbox(100)
+    httpPool = newAsyncHttpClientPool(10)
+    checkCache = newLruCache[string, bool](100)
+    userCache = newLruCache[string, JsonNode](100)
+    fedis: seq[FediWatch]
+    log = log
   proc handleTarget(doc: proto.Message[Target]) {.async.} =
-    let target = doc.data
-    let typ = target.options{"typ"}.getStr("")
+    let
+      target = doc.data
+      typ = target.options{"typ"}.getStr("")
     var client = await httpPool.getHttpClient()
     case typ:
       of "User":
