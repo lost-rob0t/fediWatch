@@ -1,17 +1,27 @@
 #+title: Readme
 * About
 Fedi watch a OSINT tool to monitor posts on a instance
+
+Here is a early benchmark loaded from 10K timelines (mind you its prob far lower)
+Its just a surubar counting messages its getting over the starRouter.
+[[./emacs-2023-09-25_17.12.29.mp4][docs per second]].
+
 * Install FediWatch
 ***NOTE*** FEDIWATCH IS A STARINTEL BOT, PLEASE CONFIGURE STARINTEL BEFORE OPENING ANY ISSUES.
-
 
 Nimble inside project root
 #+begin_src shell
 nimble install
 #+end_src
+
 If you just want to run it standalone without docker (not reconmended).
 #+begin_src shell
 nimble install https://github.com/lost-rob0t/fediWatch
+#+end_src
+
+compile
+#+begin_src shell
+nim c src/fediWatch.nim
 #+end_src
 
 Via docker
@@ -25,7 +35,7 @@ you can pass them in like this
 sudo docker run --env-file <path to env file> fediwatch:latest
 #+end_src
 
-
+** Usage
 Enviroment settings to set
 + FEDIWATCH_LOG defaults to $appname.$y$MM$dd.log
 + FEDIWATCH_LOG_LEVEL defaults to lvlInfo
@@ -37,10 +47,14 @@ command line args
 + ~-s~ set the router subscriber port, should be 6000 by default
 + ~-a~ set the router api port, should be 6001 by default
 
-
-
-* TODO [1/4]
+~launch.sh~ is a simple bash script to launch n instances of fediwatch
+To run 5 instances
+#+begin_src shell
+bash launch.sh 5
+#+end_src
+Dont worry, its auto magically load balanced round-robin amongst each one.
+* TODO [2/4]
 + [X] user scraping
++ [X] Let log level and format be set by args
 + [ ] account watching
 + [ ] Let router url be set by env
-+ [ ] Let log level and format be set by args

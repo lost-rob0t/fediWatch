@@ -7,7 +7,7 @@ import lrucache
 import asyncdispatch
 import httpcore
 import httpclient
-import deques, asyncdispatch
+import deques
 import times
 import tables
 import strformat
@@ -24,6 +24,7 @@ type
     config: Target
     lastMessage: string
     t: int64
+
   FediWatchConfig = object
     logpath: string
     logLevel: string
@@ -57,7 +58,7 @@ const USER_AGENT =  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 
 
 proc filterTarget(doc: proto.Message[Target]): bool =
-  if doc.topic == "fediwatch":
+  if doc.topic.contains "fediwatch":
     return true
 
 
@@ -196,15 +197,15 @@ proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: AsyncFileLo
          await fut
       except Exception:
          log.error(getCurrentExceptionMsg())
-proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
-  var
-    routerClient = routerClient
-    inbox = Target.newInbox(100)
-    httpPool = newAsyncHttpClientPool(10)
-    checkCache = newLruCache[string, bool](100)
-    userCache = newLruCache[string, JsonNode](100)
-    fedis: seq[FediWatch]
-    log = log
+proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.}  =
+  var routerClient = routerClient
+  var inbox = Target.newInbox(100)
+  var httpPool = newAsyncHttpClientPool(10)
+  var checkCache = newLruCache[string, bool](100)
+  var userCache = newLruCache[string, JsonNode](100)
+  var fedis: seq[FediWatch]
+  var log = log
+
   proc handleTarget(doc: proto.Message[Target]) {.async.} =
     let
       target = doc.data
@@ -235,11 +236,12 @@ proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp
   log.info fmt"starRouter api address: {apiAddress}"
   log.info fmt"starRouter pub/sub address: {subAddress}"
   # TODO Limit topics to fediwatch or related object types.
-  var client = newClient("fediwatch", subAddress, apiAddress, 10_000, @[""])
-  client.connect()
-  waitFor client.userLoop(log)
-
+  var client = newClient("fediwatch", subAddress, apiAddress, 5, @[])
+  waitFor client.connect()
+  while true:
+    try:
+      waitFor client.userLoop(log)
+    except Exception:
+      log.error(getCurrentExceptionMsg())
 when isMainModule:
   dispatch main
-
-
