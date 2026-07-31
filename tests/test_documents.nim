@@ -123,6 +123,7 @@ suite "RabbitMQ configuration":
     check address.username == "actor"
     check address.password == "p@ss"
     check address.vhost == "/starintel"
+    check not address.tls
 
   test "uses standard RabbitMQ defaults":
     let address = parseRabbitAddress("amqp://localhost/")
@@ -130,7 +131,10 @@ suite "RabbitMQ configuration":
     check address.username == "guest"
     check address.password == "guest"
     check address.vhost == "/"
+    check not address.tls
 
-  test "rejects TLS URLs until an SSL socket is configured":
-    expect ValueError:
-      discard parseRabbitAddress("amqps://localhost/")
+  test "uses verified TLS for AMQPS":
+    let address = parseRabbitAddress("amqps://rabbit.example/%2Fintel")
+    check address.port == 5671
+    check address.vhost == "/intel"
+    check address.tls
