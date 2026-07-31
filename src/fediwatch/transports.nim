@@ -1,8 +1,6 @@
 import std/[asyncdispatch, httpclient, httpcore, json, strutils]
 
-import asyncrabbitmq/[asyncrabbitmq, basic, connection, exchange, message]
-
-import config
+import config, rabbitmq_bridge
 
 
 type
@@ -15,24 +13,15 @@ type
     rabbitUrl: string
     exchangeName: string
     routingPrefix: string
-    rabbit: RabbitMQ
-    exchangeHandle: Exchange
+    rabbit: RabbitPublisher
 
 
-proc connectRabbit(emitter: Emitter) {.async.} =
+proc connectRabbit(emitter: Emitter) =
   if not emitter.rabbit.isNil:
-    try:
-      await emitter.rabbit.close()
-    except CatchableError:
-      discard
-
-  let address = emitter.rabbitUrl.fromURL()
-  emitter.rabbit = newRabbitMQ(address, 1)
-  let channel = await emitter.rabbit.connect()
-  emitter.exchangeHandle = await channel.exchangeDeclare(
-    emitter.exchangeName,
-    EXCHANGE_TOPIC,
-    durable = true
+    emitter.rabbit.close()
+  emitter.rabbit = newRabbitPublisher(
+    parseRabbitAddress(emitter.rabbitUrl),
+    emitter.exchangeName
   )
 
 
@@ -57,7 +46,7 @@ proc newEmitter*(app: AppConfig): Future[Emitter] {.async.} =
     if app.httpToken.len > 0:
       result.httpClient.headers["Authorization"] = "Bearer " & app.httpToken
   of "rabbitmq":
-    await result.connectRabbit()
+    result.connectRabbit()
   else:
     raise newException(ValueError, "unsupported transport: " & result.transport)
 
@@ -90,24 +79,21 @@ proc emitHttp(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
       discard
 
 
-proc emitRabbit(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
+proc emitRabbit(emitter: Emitter, documents: openArray[JsonNode]) =
   for document in documents:
-    let dtype = document{"dtype"}.getStr("")
+    let
+      dtype = document{"dtype"}.getStr("")
+      messageId = document{"_id"}.getStr("")
     if dtype.len == 0:
       raise newException(ValueError, "cannot publish a document without dtype")
+    if messageId.len == 0:
+      raise newException(ValueError, "cannot publish a document without _id")
 
-    let properties = newBasicProperties()
-    properties.contentType = "application/json"
-    properties.contentEncoding = "utf-8"
-    properties.deliveryMode = 2'u8
-    properties.messageId = document{"_id"}.getStr("")
-    properties.pType = dtype
-    properties.appId = "fediwatch"
-
-    let routingKey = emitter.routingPrefix & "." & dtype
-    await emitter.exchangeHandle.publish(
-      routingKey,
-      newMessage($document, properties)
+    emitter.rabbit.publish(
+      routingKey = emitter.routingPrefix & "." & dtype,
+      body = $document,
+      messageId = messageId,
+      documentType = dtype
     )
 
 
@@ -119,7 +105,7 @@ proc emitChunk(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
       of "http":
         await emitter.emitHttp(documents)
       of "rabbitmq":
-        await emitter.emitRabbit(documents)
+        emitter.emitRabbit(documents)
       else:
         raise newException(ValueError,
           "unsupported transport: " & emitter.transport)
@@ -129,7 +115,7 @@ proc emitChunk(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
         raise
       inc attempt
       if emitter.transport == "rabbitmq":
-        await emitter.connectRabbit()
+        emitter.connectRabbit()
       let delayMs = min(5000, 250 * (1 shl (attempt - 1)))
       await sleepAsync(delayMs)
 
@@ -146,4 +132,4 @@ proc close*(emitter: Emitter) {.async.} =
   if not emitter.httpClient.isNil:
     emitter.httpClient.close()
   if not emitter.rabbit.isNil:
-    await emitter.rabbit.close()
+    emitter.rabbit.close()
