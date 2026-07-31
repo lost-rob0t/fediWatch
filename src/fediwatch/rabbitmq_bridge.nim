@@ -23,6 +23,10 @@ proc bridgeConnect(host: cstring, port, useTls: cint, caCert,
                    error: cstring, errorLength: csize_t): pointer
     {.importc: "fw_rabbit_connect", cdecl.}
 
+proc bridgeBindQueue(handle: pointer, queue, routingKey: cstring,
+                     error: cstring, errorLength: csize_t): cint
+    {.importc: "fw_rabbit_bind_queue", cdecl.}
+
 proc bridgePublish(handle: pointer, routingKey, body, messageId,
                    documentType: cstring, error: cstring,
                    errorLength: csize_t): cint
@@ -95,6 +99,23 @@ proc newRabbitPublisher*(address: RabbitAddress,
     raise newException(IOError,
       "RabbitMQ connection failed: " & $error.cstring)
   result = RabbitPublisher(handle: handle)
+
+
+proc bindQueue*(publisher: RabbitPublisher, queue, routingKey: string) =
+  if publisher.isNil or publisher.handle.isNil:
+    raise newException(IOError, "RabbitMQ publisher is not connected")
+
+  var error = newString(512)
+  let status = bridgeBindQueue(
+    publisher.handle,
+    queue.cstring,
+    routingKey.cstring,
+    error.cstring,
+    error.len.csize_t
+  )
+  if status != 0:
+    raise newException(IOError,
+      "RabbitMQ queue binding failed: " & $error.cstring)
 
 
 proc publish*(publisher: RabbitPublisher, routingKey, body,
