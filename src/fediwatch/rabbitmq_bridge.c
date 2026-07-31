@@ -58,8 +58,9 @@ static int fw_rpc_ok(amqp_rpc_reply_t reply, char *error, size_t error_length) {
 }
 
 void *fw_rabbit_connect(const char *host, int port, int use_tls,
-                        const char *username, const char *password,
-                        const char *vhost, const char *exchange, char *error,
+                        const char *ca_cert, const char *username,
+                        const char *password, const char *vhost,
+                        const char *exchange, char *error,
                         size_t error_length) {
   fw_rabbit_handle *handle = NULL;
   amqp_socket_t *socket = NULL;
@@ -98,7 +99,11 @@ void *fw_rabbit_connect(const char *host, int port, int use_tls,
       fw_error(error, error_length, "could not allocate RabbitMQ TLS socket");
       goto fail;
     }
-    status = amqp_ssl_socket_enable_default_verify_paths(socket);
+    if (ca_cert == NULL || ca_cert[0] == '\0') {
+      fw_error(error, error_length, "RabbitMQ TLS CA certificate path is empty");
+      goto fail;
+    }
+    status = amqp_ssl_socket_set_cacert(socket, ca_cert);
     if (status != AMQP_STATUS_OK) {
       fw_error(error, error_length, amqp_error_string2(status));
       goto fail;
