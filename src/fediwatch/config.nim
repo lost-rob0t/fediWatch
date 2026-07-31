@@ -67,7 +67,7 @@ proc joinUrl(base, path: string): string =
   result = normalizeHost(base)
   var suffix = path.strip()
   while suffix.len > 0 and suffix[0] == '/':
-    suffix.delete(0, 0)
+    suffix.delete(0..0)
   result.add("/" & suffix)
 
 
