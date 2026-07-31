@@ -1,5 +1,6 @@
-import std/[json, sha1, strutils, times, uri]
+import std/[json, strutils, times, uri]
 
+import checksums/sha2
 import fedi
 import starintel_doc
 
@@ -14,7 +15,9 @@ proc isoNow*(): string =
 
 
 proc stableId*(prefix, value: string): string =
-  prefix & "-" & $secureHash(value)
+  var hasher = initSha_256()
+  hasher.update(value)
+  result = prefix & "-" & $hasher.digest()
 
 
 proc instanceDomain(instanceHost: string): string =
