@@ -11,14 +11,15 @@ type
     username*: string
     password*: string
     vhost*: string
+    tls*: bool
 
   RabbitPublisher* = ref object
     handle: pointer
 
 
-proc bridgeConnect(host: cstring, port: cint, username, password, vhost,
-                   exchange: cstring, error: cstring,
-                   errorLength: csize_t): pointer
+proc bridgeConnect(host: cstring, port, useTls: cint,
+                   username, password, vhost, exchange: cstring,
+                   error: cstring, errorLength: csize_t): pointer
     {.importc: "fw_rabbit_connect", cdecl.}
 
 proc bridgePublish(handle: pointer, routingKey, body, messageId,
@@ -31,16 +32,19 @@ proc bridgeClose(handle: pointer)
 
 
 proc parseRabbitAddress*(value: string): RabbitAddress =
-  let parsed = parseUri(value.strip())
-  if parsed.scheme.toLowerAscii() != "amqp":
+  let
+    parsed = parseUri(value.strip())
+    scheme = parsed.scheme.toLowerAscii()
+  if scheme notin ["amqp", "amqps"]:
     raise newException(ValueError,
-      "STARINTEL_RABBITMQ_URL must use the amqp scheme")
+      "STARINTEL_RABBITMQ_URL must use the amqp or amqps scheme")
   if parsed.hostname.len == 0:
     raise newException(ValueError,
       "STARINTEL_RABBITMQ_URL is missing a hostname")
 
   result.host = parsed.hostname
-  result.port = 5672
+  result.tls = scheme == "amqps"
+  result.port = if result.tls: 5671 else: 5672
   if parsed.port.len > 0:
     try:
       result.port = parseInt(parsed.port)
@@ -72,6 +76,7 @@ proc newRabbitPublisher*(address: RabbitAddress,
   let handle = bridgeConnect(
     address.host.cstring,
     address.port.cint,
+    address.tls.cint,
     address.username.cstring,
     address.password.cstring,
     address.vhost.cstring,
