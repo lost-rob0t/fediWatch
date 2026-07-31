@@ -4,6 +4,7 @@ import fediwatch/rabbitmq_bridge
 
 
 proc main() =
+  const routingKey = "documents.ingest.user"
   let publisher = newRabbitPublisher(
     parseRabbitAddress(getEnv(
       "TEST_RABBITMQ_URL",
@@ -14,14 +15,15 @@ proc main() =
   defer:
     publisher.close()
 
+  publisher.bindQueue("fediwatch-ci-confirm", routingKey)
   publisher.publish(
-    routingKey = "documents.ingest.user",
+    routingKey = routingKey,
     body = "{\"_id\":\"rabbitmq-ci\",\"dtype\":\"user\"}",
     messageId = "rabbitmq-ci",
     documentType = "user"
   )
 
-  echo "RabbitMQ publish integration passed"
+  echo "RabbitMQ routed publisher confirm passed"
 
 
 main()
