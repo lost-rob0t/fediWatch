@@ -1,4 +1,5 @@
 #include <rabbitmq-c/amqp.h>
+#include <rabbitmq-c/ssl_socket.h>
 #include <rabbitmq-c/tcp_socket.h>
 
 #include <stdint.h>
@@ -44,9 +45,9 @@ static int fw_rpc_ok(amqp_rpc_reply_t reply, char *error, size_t error_length) {
   }
 }
 
-void *fw_rabbit_connect(const char *host, int port, const char *username,
-                        const char *password, const char *vhost,
-                        const char *exchange, char *error,
+void *fw_rabbit_connect(const char *host, int port, int use_tls,
+                        const char *username, const char *password,
+                        const char *vhost, const char *exchange, char *error,
                         size_t error_length) {
   fw_rabbit_handle *handle = NULL;
   amqp_socket_t *socket = NULL;
@@ -79,10 +80,25 @@ void *fw_rabbit_connect(const char *host, int port, const char *username,
     return NULL;
   }
 
-  socket = amqp_tcp_socket_new(handle->connection);
-  if (socket == NULL) {
-    fw_error(error, error_length, "could not allocate RabbitMQ TCP socket");
-    goto fail;
+  if (use_tls) {
+    socket = amqp_ssl_socket_new(handle->connection);
+    if (socket == NULL) {
+      fw_error(error, error_length, "could not allocate RabbitMQ TLS socket");
+      goto fail;
+    }
+    status = amqp_ssl_socket_enable_default_verify_paths(socket);
+    if (status != AMQP_STATUS_OK) {
+      fw_error(error, error_length, amqp_error_string2(status));
+      goto fail;
+    }
+    amqp_ssl_socket_set_verify_peer(socket, 1);
+    amqp_ssl_socket_set_verify_hostname(socket, 1);
+  } else {
+    socket = amqp_tcp_socket_new(handle->connection);
+    if (socket == NULL) {
+      fw_error(error, error_length, "could not allocate RabbitMQ TCP socket");
+      goto fail;
+    }
   }
 
   status = amqp_socket_open(socket, host, port);
