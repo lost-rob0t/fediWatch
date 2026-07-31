@@ -1,4 +1,4 @@
-import std/[strutils, uri]
+import std/[os, strutils, uri]
 
 {.compile: "rabbitmq_bridge.c".}
 {.passL: "-lrabbitmq".}
@@ -12,12 +12,13 @@ type
     password*: string
     vhost*: string
     tls*: bool
+    caCert*: string
 
   RabbitPublisher* = ref object
     handle: pointer
 
 
-proc bridgeConnect(host: cstring, port, useTls: cint,
+proc bridgeConnect(host: cstring, port, useTls: cint, caCert,
                    username, password, vhost, exchange: cstring,
                    error: cstring, errorLength: csize_t): pointer
     {.importc: "fw_rabbit_connect", cdecl.}
@@ -64,10 +65,15 @@ proc parseRabbitAddress*(value: string): RabbitAddress =
 
   var path = parsed.path
   while path.len > 0 and path[0] == '/':
-    path.delete(0, 0)
+    path.delete(0..0)
   result.vhost =
     if path.len == 0: "/"
     else: decodeUrl(path)
+
+  result.caCert = getEnv(
+    "STARINTEL_RABBITMQ_CA_CERT",
+    getEnv("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
+  )
 
 
 proc newRabbitPublisher*(address: RabbitAddress,
@@ -77,6 +83,7 @@ proc newRabbitPublisher*(address: RabbitAddress,
     address.host.cstring,
     address.port.cint,
     address.tls.cint,
+    address.caCert.cstring,
     address.username.cstring,
     address.password.cstring,
     address.vhost.cstring,
