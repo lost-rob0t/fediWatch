@@ -1,4 +1,4 @@
-import std/[json, md5, strutils, times, uri]
+import std/[json, sha1, strutils, times, uri]
 
 import fedi
 import starintel_doc
@@ -14,7 +14,7 @@ proc isoNow*(): string =
 
 
 proc stableId*(prefix, value: string): string =
-  prefix & "-" & $toMD5(value)
+  prefix & "-" & $secureHash(value)
 
 
 proc instanceDomain(instanceHost: string): string =
