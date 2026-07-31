@@ -143,7 +143,7 @@ proc validateDocuments(documents: openArray[JsonNode], schema: JsonNode) =
           checked.category & ": " & checked.message)
 
 
-proc runCycle(watchers: openArray[Watcher], emitter: Emitter,
+proc runCycle(watchers: seq[Watcher], emitter: Emitter,
               schema: JsonNode, logger: Logger) {.async.} =
   var futures: seq[Future[PollResult]]
   for watcher in watchers:
