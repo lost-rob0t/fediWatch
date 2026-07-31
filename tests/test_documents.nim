@@ -1,6 +1,6 @@
-import std/[json, unittest]
+import std/[json, strutils, unittest]
 
-import fediwatch/documents
+import fediwatch/[documents, rabbitmq_bridge]
 
 
 proc account(id, username, domain: string): JsonNode =
@@ -111,3 +111,26 @@ suite "StarIntel 0.9 document generation":
 
     check postCount == 1
     check repostCount == 1
+
+
+suite "RabbitMQ configuration":
+  test "parses credentials, port, and encoded vhost":
+    let address = parseRabbitAddress(
+      "amqp://actor:p%40ss@rabbit.internal:5678/%2Fstarintel"
+    )
+    check address.host == "rabbit.internal"
+    check address.port == 5678
+    check address.username == "actor"
+    check address.password == "p@ss"
+    check address.vhost == "/starintel"
+
+  test "uses standard RabbitMQ defaults":
+    let address = parseRabbitAddress("amqp://localhost/")
+    check address.port == 5672
+    check address.username == "guest"
+    check address.password == "guest"
+    check address.vhost == "/"
+
+  test "rejects TLS URLs until an SSL socket is configured":
+    expect ValueError:
+      discard parseRabbitAddress("amqps://localhost/")
