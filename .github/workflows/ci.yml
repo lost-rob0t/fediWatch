@@ -11,6 +11,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:4.3.4
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v6
       - run: sudo apt-get update && sudo apt-get install -y librabbitmq-dev
@@ -20,6 +30,7 @@ jobs:
       - run: nimble install -y --depsOnly
       - run: nimble test
       - run: nimble buildRelease
+      - run: nim c -r --path:src tests/test_rabbitmq.nim
 
   container:
     runs-on: ubuntu-latest
