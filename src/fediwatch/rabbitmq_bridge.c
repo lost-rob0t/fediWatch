@@ -18,10 +18,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #define FW_CHANNEL 1
 #define FW_FRAME_MAX 131072
 #define FW_HEARTBEAT 30
+#define FW_CONFIRM_TIMEOUT_SECONDS 10
 
 typedef struct fw_rabbit_handle {
   amqp_connection_state_t connection;
@@ -144,6 +146,11 @@ void *fw_rabbit_connect(const char *host, int port, int use_tls,
     goto fail;
   }
 
+  amqp_confirm_select(handle->connection, FW_CHANNEL);
+  if (!fw_rpc_ok(amqp_get_rpc_reply(handle->connection), error, error_length)) {
+    goto fail;
+  }
+
   return handle;
 
 fail:
@@ -153,6 +160,84 @@ fail:
   free(handle->exchange);
   free(handle);
   return NULL;
+}
+
+int fw_rabbit_bind_queue(void *opaque_handle, const char *queue,
+                         const char *routing_key, char *error,
+                         size_t error_length) {
+  fw_rabbit_handle *handle = opaque_handle;
+
+  if (handle == NULL || queue == NULL || routing_key == NULL) {
+    fw_error(error, error_length, "RabbitMQ queue binding arguments cannot be null");
+    return -1;
+  }
+
+  amqp_queue_declare(handle->connection, FW_CHANNEL, amqp_cstring_bytes(queue),
+                     0, 0, 1, 1, amqp_empty_table);
+  if (!fw_rpc_ok(amqp_get_rpc_reply(handle->connection), error, error_length)) {
+    return -2;
+  }
+
+  amqp_queue_bind(handle->connection, FW_CHANNEL, amqp_cstring_bytes(queue),
+                  amqp_cstring_bytes(handle->exchange),
+                  amqp_cstring_bytes(routing_key), amqp_empty_table);
+  if (!fw_rpc_ok(amqp_get_rpc_reply(handle->connection), error, error_length)) {
+    return -3;
+  }
+
+  return AMQP_STATUS_OK;
+}
+
+static int fw_wait_for_confirm(fw_rabbit_handle *handle, char *error,
+                               size_t error_length) {
+  int returned = 0;
+
+  for (;;) {
+    amqp_frame_t frame;
+    struct timeval timeout = {FW_CONFIRM_TIMEOUT_SECONDS, 0};
+    int status = amqp_simple_wait_frame_noblock(handle->connection, &frame,
+                                                 &timeout);
+    if (status != AMQP_STATUS_OK) {
+      fw_error(error, error_length, amqp_error_string2(status));
+      return status;
+    }
+
+    if (frame.frame_type != AMQP_FRAME_METHOD || frame.channel != FW_CHANNEL) {
+      continue;
+    }
+
+    switch (frame.payload.method.id) {
+    case AMQP_BASIC_RETURN_METHOD: {
+      amqp_message_t message;
+      amqp_rpc_reply_t reply =
+          amqp_read_message(handle->connection, FW_CHANNEL, &message, 0);
+      if (!fw_rpc_ok(reply, error, error_length)) {
+        return -4;
+      }
+      amqp_destroy_message(&message);
+      returned = 1;
+      break;
+    }
+    case AMQP_BASIC_ACK_METHOD:
+      if (returned) {
+        fw_error(error, error_length,
+                 "RabbitMQ rejected the routing key as unroutable");
+        return -5;
+      }
+      return AMQP_STATUS_OK;
+    case AMQP_BASIC_NACK_METHOD:
+      fw_error(error, error_length, "RabbitMQ negatively acknowledged the message");
+      return -6;
+    case AMQP_CHANNEL_CLOSE_METHOD:
+      fw_error(error, error_length, "RabbitMQ closed the publishing channel");
+      return -7;
+    case AMQP_CONNECTION_CLOSE_METHOD:
+      fw_error(error, error_length, "RabbitMQ closed the connection");
+      return -8;
+    default:
+      break;
+    }
+  }
 }
 
 int fw_rabbit_publish(void *opaque_handle, const char *routing_key,
@@ -184,14 +269,14 @@ int fw_rabbit_publish(void *opaque_handle, const char *routing_key,
 
   status = amqp_basic_publish(
       handle->connection, FW_CHANNEL, amqp_cstring_bytes(handle->exchange),
-      amqp_cstring_bytes(routing_key), 0, 0, &properties,
+      amqp_cstring_bytes(routing_key), 1, 0, &properties,
       amqp_cstring_bytes(body));
   if (status != AMQP_STATUS_OK) {
     fw_error(error, error_length, amqp_error_string2(status));
     return status;
   }
 
-  return AMQP_STATUS_OK;
+  return fw_wait_for_confirm(handle, error, error_length);
 }
 
 void fw_rabbit_close(void *opaque_handle) {
