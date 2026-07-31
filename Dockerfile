@@ -1,17 +1,21 @@
-FROM nimlang/nim:2.2.10-alpine AS builder
+FROM nim:2.2.10 AS builder
 
-RUN apk add --no-cache git gcc musl-dev openssl-dev
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git gcc libc6-dev libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
-
 COPY fediwatch.nimble config.nims ./
 RUN nimble install -y --depsOnly
 
 COPY src ./src
 RUN nimble buildRelease
 
-FROM alpine:3.22
-RUN apk add --no-cache ca-certificates openssl
-COPY --from=builder /build/src/fediWatch /usr/local/bin/fediwatch
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
+COPY --from=builder /build/src/fediWatch /usr/local/bin/fediwatch
 USER nobody
 ENTRYPOINT ["/usr/local/bin/fediwatch"]
