@@ -10,6 +10,7 @@ bin         = @["fediWatch"]
 # Dependencies
 
 requires "nim >= 2.2.0"
+requires "checksums >= 0.2.2"
 requires "https://github.com/lost-rob0t/fedi#ac234e1848695532838a65a01ca5b1bfa9e8289e"
 requires "https://github.com/lost-rob0t/starintel-doc.nim#b4124c586efa1393c1cf1afb94e10058cfb58b17"
 
