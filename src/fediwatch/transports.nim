@@ -57,7 +57,7 @@ proc jsonArray(documents: openArray[JsonNode]): JsonNode =
     result.add(document)
 
 
-proc emitHttp(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
+proc emitHttp(emitter: Emitter, documents: seq[JsonNode]) {.async.} =
   let response = await emitter.httpClient.request(
     emitter.httpUrl,
     httpMethod = HttpPost,
@@ -97,7 +97,7 @@ proc emitRabbit(emitter: Emitter, documents: openArray[JsonNode]) =
     )
 
 
-proc emitChunk(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
+proc emitChunk(emitter: Emitter, documents: seq[JsonNode]) {.async.} =
   var attempt = 0
   while true:
     try:
@@ -120,7 +120,7 @@ proc emitChunk(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
       await sleepAsync(delayMs)
 
 
-proc emitBatch*(emitter: Emitter, documents: openArray[JsonNode]) {.async.} =
+proc emitBatch*(emitter: Emitter, documents: seq[JsonNode]) {.async.} =
   var offset = 0
   while offset < documents.len:
     let stop = min(documents.len, offset + emitter.batchSize)
