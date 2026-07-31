@@ -1,10 +1,11 @@
 { pkgs ? import <nixpkgs> {} }:
 
-with pkgs;
-
-mkShell {
-  buildInputs = [
+pkgs.mkShell {
+  packages = with pkgs; [
+    git
+    nim
     openssl
-    zeromq
+    rabbitmq-c
+    rabbitmq-server
   ];
 }

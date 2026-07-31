@@ -1,46 +1,172 @@
-#+title: Readme
+#+title: fediWatch
+
 * About
-Fedi watch a OSINT tool to monitor posts on a instance
-* Install FediWatch
-***NOTE*** FEDIWATCH IS A STARINTEL BOT, PLEASE CONFIGURE STARINTEL BEFORE OPENING ANY ISSUES.
 
+=fediWatch= is a Nim 2 StarIntel actor that monitors Mastodon instances or
+accounts and emits strict StarIntel 0.9 document envelopes.
 
-Nimble inside project root
+Each status produces:
+
+- a =user= document;
+- a =social-media-post= document;
+- an =authored= relation;
+- for boosts, a =reposted= relation instead of falsely attributing the original
+  post content to the boosting account.
+
+Output is selectable at runtime:
+
+- StarIntel HTTP =POST /documents/bulk=;
+- RabbitMQ topic exchange =documents= with routing keys
+  =documents.ingest.<dtype>=.
+
+The project is licensed under =AGPL-3.0-only=.
+
+* Requirements
+
+- Nim 2.2 or newer;
+- a Mastodon-compatible API;
+- =rabbitmq-c= development headers and library for native builds;
+- either starintel-server HTTP access or RabbitMQ access.
+
+On Debian or Ubuntu:
+
 #+begin_src shell
-nimble install
+sudo apt-get install librabbitmq-dev
 #+end_src
-If you just want to run it standalone without docker (not reconmended).
+
+The included Nix shell provides Nim, OpenSSL, =rabbitmq-c=, and a local
+RabbitMQ server.
+
+* Build
+
 #+begin_src shell
-nimble install https://github.com/lost-rob0t/fediWatch
+nimble install -y
+nimble buildRelease
 #+end_src
 
-Via docker
+Run tests:
+
 #+begin_src shell
-docker build . -t fediWatch
+nimble test -y
 #+end_src
 
-Edit the example-.env values that configure the bot
-you can pass them in like this
+* Targets
+
+Targets can be loaded from inline JSON, a local JSON file, or the StarIntel
+HTTP API.
+
+** Inline targets
+
 #+begin_src shell
-sudo docker run --env-file <path to env file> fediwatch:latest
+export FEDIWATCH_TARGETS='[
+  {
+    "target": "https://mastodon.social",
+    "dataset": "fediverse",
+    "options": {
+      "type": "instance",
+      "local": true,
+      "limit": 40
+    }
+  },
+  {
+    "target": "alice@example.social",
+    "dataset": "fediverse",
+    "options": {
+      "type": "account",
+      "exclude_reblogs": true
+    }
+  }
+]'
 #+end_src
 
+** StarIntel 0.9 target document
 
-Enviroment settings to set
-+ FEDIWATCH_LOG defaults to $appname.$y$MM$dd.log
-+ FEDIWATCH_LOG_LEVEL defaults to lvlInfo
-  Note when setting the level it has to start with lvl{name} so error would be lvlError, lvlWarn, ect
+#+begin_src json
+{
+  "_id": "target-fediwatch-example",
+  "dataset": "fediverse",
+  "dtype": "target",
+  "schema_version": "0.9.0",
+  "version": 1,
+  "date_added": "2026-07-30T00:00:00.000Z",
+  "date_updated": "2026-07-30T00:00:00.000Z",
+  "sources": [],
+  "evidence": [],
+  "data": {
+    "actor": "fediwatch",
+    "target": "https://mastodon.social",
+    "target_type": "instance",
+    "options": [
+      {"key": "local", "value": true},
+      {"key": "limit", "value": 40}
+    ]
+  }
+}
+#+end_src
 
-command line args
+Supported target sources:
 
-+ ~-h~ open help
-+ ~-s~ set the router subscriber port, should be 6000 by default
-+ ~-a~ set the router api port, should be 6001 by default
+| Variable | Meaning |
+|----------+---------|
+| =FEDIWATCH_TARGETS= | Inline JSON object or array |
+| =FEDIWATCH_TARGETS_FILE= | Path to a JSON object or array |
+| =FEDIWATCH_TARGETS_URL= | HTTP endpoint returning targets |
 
+When none are set, fediWatch requests
+=STARINTEL_HTTP_URL/targets/fediwatch=.
 
+* HTTP bulk output
 
-* TODO [1/4]
-+ [X] user scraping
-+ [ ] account watching
-+ [ ] Let router url be set by env
-+ [ ] Let log level and format be set by args
+#+begin_src shell
+export FEDIWATCH_TRANSPORT=http
+export STARINTEL_HTTP_URL=http://127.0.0.1:5000
+# Optional explicit override:
+# export STARINTEL_HTTP_BULK_URL=http://127.0.0.1:5000/documents/bulk
+# export STARINTEL_HTTP_TOKEN=...
+#+end_src
+
+The actor splits output into batches of at most 500 documents and rejects
+partial bulk failures.
+
+* RabbitMQ output
+
+#+begin_src shell
+export FEDIWATCH_TRANSPORT=rabbitmq
+export STARINTEL_RABBITMQ_URL=amqp://guest:guest@127.0.0.1/
+export STARINTEL_RABBITMQ_EXCHANGE=documents
+export STARINTEL_RABBITMQ_ROUTING_PREFIX=documents.ingest
+#+end_src
+
+Both =amqp://= and =amqps://= URLs are supported. AMQPS uses the operating
+system CA store and verifies both the certificate chain and broker hostname.
+Percent-encode credentials and virtual hosts when needed, for example
+=amqps://actor:p%40ss@rabbit.example/%2Fstarintel=.
+
+The RabbitMQ path uses a small Nim binding over the maintained =rabbitmq-c=
+library rather than the obsolete Nim package that previously broke dependency
+installation. Messages are persistent JSON with the document type included in
+both the AMQP type property and routing key.
+
+* Runtime configuration
+
+| Variable | Default |
+|----------+---------|
+| =FEDIWATCH_TRANSPORT= | =http= |
+| =FEDIWATCH_POLL_INTERVAL_SECONDS= | =60= |
+| =FEDIWATCH_BATCH_SIZE= | =500= |
+| =FEDIWATCH_EMIT_RETRIES= | =3= |
+| =FEDIWATCH_ONCE= | =false= |
+| =STAR_DATASET= | =fediverse= |
+| =STARINTEL_SCHEMA= | unset; set to validate every document against the canonical schema |
+| =FEDIWATCH_LOG= | unset; stdout only |
+| =HTTP_PROXY= / =HTTPS_PROXY= | unset |
+
+Per-target options include =auth=, =proxy=, =ua=, =since_id=, =local=,
+=remote=, =only_media=, =exclude_replies=, =exclude_reblogs=, and =limit=.
+
+* Delivery behavior
+
+The newest Mastodon status cursor is committed only after the entire generated
+batch is accepted by the selected StarIntel transport. Failed emissions are
+retried and then replayed on the next poll, providing at-least-once delivery.
+Document IDs are deterministic so CouchDB conflicts remain idempotent.
