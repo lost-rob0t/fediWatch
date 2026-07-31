@@ -1,6 +1,18 @@
-#include <rabbitmq-c/amqp.h>
-#include <rabbitmq-c/ssl_socket.h>
-#include <rabbitmq-c/tcp_socket.h>
+#if defined(__has_include)
+#  if __has_include(<rabbitmq-c/amqp.h>)
+#    include <rabbitmq-c/amqp.h>
+#    include <rabbitmq-c/ssl_socket.h>
+#    include <rabbitmq-c/tcp_socket.h>
+#  else
+#    include <amqp.h>
+#    include <amqp_ssl_socket.h>
+#    include <amqp_tcp_socket.h>
+#  endif
+#else
+#  include <amqp.h>
+#  include <amqp_ssl_socket.h>
+#  include <amqp_tcp_socket.h>
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
