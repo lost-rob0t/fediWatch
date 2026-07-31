@@ -5,6 +5,7 @@ pkgs.mkShell {
     git
     nim
     openssl
+    rabbitmq-c
     rabbitmq-server
   ];
 }
