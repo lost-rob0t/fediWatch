@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import socket
 import ssl
+import select
 import os
 import subprocess
 import sys
@@ -85,9 +86,12 @@ try:
             return api.recv_multipart()
         assert send(7,'',b'test')==[b'1']
         actor=subprocess.Popen([actor_binary,'--apiAddress='+api_address,'--subAddress='+pub_address],
-                               stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,cwd=directory,env=actor_env)
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=directory,env=actor_env)
         processes.append(actor)
-        time.sleep(.5)
+        ready,_,_=select.select([actor.stdout],[],[],15)
+        assert ready,'actor did not report a broker connection'
+        assert actor.stdout.readline().decode().strip()=='FediWatch connected to StarRouter'
+        time.sleep(.3)
         target={'id':'target:good','dataset':'test','dtype':'target','schemaVersion':'0.10.1','actor':'fediwatch',
                 'target':f'https://127.0.0.1:{http.server_port}/good','options':{'typ':'Domain','opaque':{'flag':False,'nil':None}}}
         assert send(8,json.dumps(target))==[b'1']

@@ -194,6 +194,8 @@ proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp
   # TODO Limit topics to fediwatch or related object types.
   var client = newClient("fediwatch", subAddress, apiAddress, 10_000, @["fediwatch"])
   waitFor client.connect()
+  echo "FediWatch connected to StarRouter"
+  stdout.flushFile()
   waitFor client.userLoop(log)
 
 when isMainModule:
