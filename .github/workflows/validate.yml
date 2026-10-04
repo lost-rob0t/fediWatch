@@ -1,0 +1,30 @@
+name: Validate generated StarLang consumer
+on:
+  pull_request:
+  push:
+    branches: [master, 'codex/**']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+      - name: Verify immutable upstream release
+        run: python3 scripts/sync-starintel-schema.py
+      - name: Build and test installed actor and live HTTP/ZeroMQ pipeline
+        run: nix flake check -L
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+      - name: Build tested container and broker
+        run: |
+          docker build -t fediwatch:validation .
+          nix build --out-link router github:lost-rob0t/starRouter/20e5c9e8bf49660fd230d8e7306dd9209648f6e9
+      - name: Test live container with verified HTTPS and ZeroMQ
+        run: |
+          python3 -m pip install pyzmq
+          python3 tests/actor_wire.py tests/container-launcher.sh ./router/bin/starRouter

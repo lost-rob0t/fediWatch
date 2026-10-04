@@ -1,6 +1,5 @@
 import starRouter
-import starintel_doc except newMessage
-import jsony
+import starintel_doc except Message
 import fedi
 import json
 import lrucache
@@ -14,10 +13,9 @@ import strformat
 import strutils
 import cligen
 import md5
-import morelogging
-from logging import Level, LevelNames
+import std/[logging, options, net]
+import fediwatchpkg/documents
 from os import getEnv
-import zmq
 type
   FediWatch = ref object
     client: AsyncFediClient
@@ -48,43 +46,50 @@ proc enqueue*[T](pool: ResourcePool[T], item: T) =
 
 
 
+proc verifiedHttpClient(userAgent = "fediWatch"): AsyncHttpClient =
+  newAsyncHttpClient(userAgent=userAgent, sslContext=newContext(verifyMode=CVerifyPeerUseEnvVars))
+
+proc observedFediClient(host: string, token = "", userAgent = "fediWatch"): AsyncFediClient =
+  let client = verifiedHttpClient(userAgent)
+  client.headers = newHttpHeaders({"Accept": "application/json", "Content-Type": "application/json"})
+  if token.len > 0: client.headers["Authorization"] = "Bearer " & token
+  AsyncFediClient(baseUrl: normalizeHost(host), hc: client)
+
 proc newAsyncHttpClientPool*(size: int): AsyncHttpClientPool =
   result.new()
-  for i in 1..size: result.enqueue(newAsyncHttpClient())
+  for i in 1..size: result.enqueue(verifiedHttpClient())
 
 
 const USER_AGENT =  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
 
 
 proc filterTarget(doc: proto.Message[Target]): bool =
-  if doc.topic == "fediwatch":
-    return true
+  if doc.typ == EventType.newDocument:
+    return doc.data.actor == "fediwatch"
 
 
 # NOTE maybe the client should be set from a resource pool?
 proc initAsyncFedi*(target: Target): AsyncFediClient =
-  let token = target.options{"auth"}.getStr("")
-  let ua = target.options{"ua"}.getStr(USER_AGENT)
-  result = newAsyncFediClient(host=target.target, token = token, userAgent=ua)
+  let token = target.options.get(newJObject()){"auth"}.getStr("")
+  let ua = target.options.get(newJObject()){"ua"}.getStr(USER_AGENT)
+  result = observedFediClient(host=target.target, token = token, userAgent=ua)
 
 
 proc initFediWatch*(target: Target): FediWatch =
   result = FediWatch(lastMessage: "", config: target, client: initAsyncFedi(target))
 
 proc parseFediuser*(user: string): (string, string) =
-  let data = user.split("@")
-  result = (username: data[0], domain: data[1])
+  result = splitAccount(user)
 
 
 proc getHttpClient(pool: AsyncHttpClientPool): Future[AsyncHttpClient] {.async.} =
   var client = await pool.dequeue()
-  defer: pool.enqueue client
   return client
 
 
 proc checkUser(client: AsyncHttpClient, username: string): Future[bool] {.async.} =
   let resp = await client.get(username.webfingerUser("https"))
-  if resp.status == Http200:
+  if resp.code == Http200:
     result = true
 
 
@@ -92,25 +97,10 @@ proc getUserInfo(client: AsyncFediClient, username: string): Future[JsonNode] {.
   result = await client.lookupAccount(username)
 
 
-proc parseUser*(user: JsonNode, dataset: string): User =
-  let
-    username = user["username"].getStr()
-    url = user["url"].getStr()
-  var doc = newuser(userName, platform = "fediverse", url)
-  doc.bio = user["note"].getStr
-  for extra in user["fields"].getElems:
-    doc.misc.add(extra)
-  doc.date_added = parseTime(user["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
-  doc.date_updated = now().toTime().toUnix
-  doc.dataset = dataset
-  doc.setType()
-  result = doc
-
 
 proc handleUser(routerClient: Client, httpClient: AsyncHttpClient,  checkCache: LruCache[string, bool], userCache: LruCache[string, JsonNode], target: Target, log: FileLogger) {.async.} =
   # Handles the incoming user targets
   var
-    accountID = 0
     userExists = false
     fedi: AsyncFediClient
   # TODO insert debug log
@@ -127,64 +117,31 @@ proc handleUser(routerClient: Client, httpClient: AsyncHttpClient,  checkCache: 
     domain = userData[1]
     username = userData[0]
     # User exists, lets procced.
-  if userExists == true:
-    # TODO insert debug log
+  if userExists:
     let url = fmt"https://{domain}"
     var resp: JsonNode
     if userCache.contains(target.target):
       resp = userCache[target.target]
     else:
-      fedi = newAsyncFediClient(host=url, token=target.options{"auth"}.getStr(""))
+      fedi = observedFediClient(host=url, token=target.options.get(newJObject()){"auth"}.getStr(""))
       resp = await fedi.getUserInfo(username)
       userCache[target.target] = resp
-      accountId = resp["id"].getInt(0)
-      var doc = newuser(resp["username"].getStr(""), domain, resp["url"].getStr(""))
-      doc.dateAdded = resp["created_at"].getStr("").parseTime("yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
-      doc.upDateTime()
-      doc.setType()
-      for field in resp["fields"].getElems:
-        doc.misc.add(field)
-        doc.dataset = target.dataset
-        # Send the User document off
-      await routerClient.emit(doc.newMessage(EventType.newDocument, routerClient.id, "user"))
-  # Remove so no leak.
+    let doc = parseUser(resp, target.dataset)
+    await routerClient.emit(doc.newMessage(EventType.newDocument, routerClient.id, "user"))
 
 
-
-proc processFeed(fw: FediWatch, routerClient: Client,  log: AsyncFileLogger) {.async.} =
-  log.info fmt"getting timeline for: {fw.config.target}"
+proc processFeed(fw: FediWatch, routerClient: Client,  log: FileLogger) {.async.} =
+  log.log(lvlInfo, fmt"getting timeline for: {fw.config.target}")
   let timeline = await fw.client.getTimeline(minId=fw.lastMessage)
   var posts = timeline.getElems
-  log.info fmt"got {posts.len} posts for {fw.config.target}"
+  log.log(lvlInfo, fmt"got {posts.len} posts for {fw.config.target}")
   for data in posts:
-    var
-      smPost = SocialMPost(dataset: fw.config.dataset)
-      user = data["account"].parseUser(fw.config.dataset)
-
-    let replyTo = data["in_reply_to_id"].getStr
-    smPost.user = user.name
-    smPost.content = data["content"].getStr
-    smPost.date_added = parseTime(data["created_at"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff'Z'", utc()).toUnix
-    smPost.date_updated = now().toTime().toUnix()
-    smPost.makeMD5ID(data["id"].getStr(smPost.content))
-    smPost.setType()
-    if replyTo.len != 0:
-      smPost.replyTo = $toMD5(replyTo)
-    for media in data["media_attachments"].getElems:
-      smPost.media.add(media["url"].getStr)
-    for tag in data["tags"].getElems:
-      let t = tag.getStr("")
-      if t.len != 0:
-        smPost.tags.add(t)
-    # incase its not a int?
-    var relation = newRelation(user.id, smPost.id, note = "", dataset=fw.config.dataset)
-    relation.setType()
+    let documents = timelineDocuments(data, fw.config.dataset)
+    for document in documents:
+      await routerClient.emit(document.newMessage(EventType.newDocument, routerClient.id, document["dtype"].getStr()))
     fw.lastMessage = data["id"].getStr("")
-    await routerClient.emit(smPost.newMessage(EventType.newDocument, routerClient.id, "SocialMPost"))
-    await routerClient.emit(user.newMessage(EventType.newDocument, routerClient.id, "user"))
-    await routerClient.emit(relation.newMessage(EventType.newDocument, routerClient.id, "Relation"))
 
-proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: AsyncFileLogger, t: int64) {.async.} =
+proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: FileLogger, t: int64) {.async.} =
   var futures: seq[Future[void]]
   if now().toTime().toUnix() >= t:
     for client in fw:
@@ -195,8 +152,8 @@ proc processTimelines(routerClient: Client, fw: seq[FediWatch], log: AsyncFileLo
       try:
          await fut
       except Exception:
-         log.error(getCurrentExceptionMsg())
-proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
+         log.log(lvlError, getCurrentExceptionMsg())
+proc userLoop(routerClient: Client, log: FileLogger) {.async.} =
   var
     routerClient = routerClient
     inbox = Target.newInbox(100)
@@ -208,16 +165,16 @@ proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
   proc handleTarget(doc: proto.Message[Target]) {.async.} =
     let
       target = doc.data
-      typ = target.options{"typ"}.getStr("")
+      typ = target.options.get(newJObject()){"typ"}.getStr("")
     var client = await httpPool.getHttpClient()
+    defer: httpPool.enqueue(client)
     case typ:
       of "User":
         await routerClient.handleUser(client, checkCache, userCache, target, log)
       of "Domain":
         fedis.add(initFediWatch(target))
-    log.info(fmt"Got Target type: {typ}")
-    log.info(fmt"Target:{target.target}")
-    log.info(fmt"Target Options: {target.options}")
+    log.log(lvlInfo, fmt"Got Target type: {typ}")
+    log.log(lvlInfo, fmt"Target:{target.target}")
   inbox.registerCB(handleTarget)
   inbox.registerFilter(filterTarget)
   var last = now().toTime().toUnix()
@@ -227,16 +184,18 @@ proc userLoop(routerClient: Client, log: AsyncFileLogger) {.async.} =
       # Lets be kind, wait a second before sending another batch
       last = now().toTime().toUnix() + 1
     except Exception:
-      log.error(getCurrentExceptionMsg())
+      log.log(lvlError, getCurrentExceptionMsg())
 
 proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp://127.0.0.1:6000") =
   let level = parseEnum[Level](getEnv("FEDIWATCH_LOG_LEVEL", "lvlInfo"))
-  var log = newAsyncFileLogger(filename_tpl=getEnv("FEDIWATCH_LOG", "$appname.$y$MM$dd.log"), flush_threshold=level)
-  log.info fmt"starRouter api address: {apiAddress}"
-  log.info fmt"starRouter pub/sub address: {subAddress}"
+  var log = newFileLogger(filename=getEnv("FEDIWATCH_LOG", "fediWatch.log"), levelThreshold=level)
+  log.log(lvlInfo, fmt"starRouter api address: {apiAddress}")
+  log.log(lvlInfo, fmt"starRouter pub/sub address: {subAddress}")
   # TODO Limit topics to fediwatch or related object types.
-  var client = newClient("fediwatch", subAddress, apiAddress, 10_000, @[""])
-  client.connect()
+  var client = newClient("fediwatch", subAddress, apiAddress, 10_000, @["fediwatch"])
+  waitFor client.connect()
+  echo "FediWatch connected to StarRouter"
+  stdout.flushFile()
   waitFor client.userLoop(log)
 
 when isMainModule:
