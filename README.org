@@ -1,46 +1,66 @@
-#+title: Readme
-* About
-Fedi watch a OSINT tool to monitor posts on a instance
-* Install FediWatch
-***NOTE*** FEDIWATCH IS A STARINTEL BOT, PLEASE CONFIGURE STARINTEL BEFORE OPENING ANY ISSUES.
+#+title: FediWatch
+* FediWatch
+FediWatch consumes automation targets and monitors Mastodon account/timeline APIs.
+It publishes StarIntel documents through StarRouter.
 
+** Document contract
+StarLang is the sole source of truth. The complete generated 0.10.1 release is
+vendored in ~schemas/starintel-0.10.1~, with immutable source commit and hashes in
+~schema/starintel-schema.lock.json~. Maintained document and Router dependencies
+are pinned, and the build verifies their complete release agrees with this lock.
 
-Nimble inside project root
+Observed accounts produce canonical ~user~ documents. Timeline observations
+produce ~socialmpost~, ~user~ and ~relation~ documents with source-defined
+references and the ~org.starintel/core@1/owns~ predicate. The complete original
+account/status object is retained in ~raw~, including unknown fields, HTML,
+false, null and empty values. Unresolved media URLs and local reply IDs remain
+in raw input rather than becoming invented document references. User and post
+identity formulas retain the historical MD5 inputs; relation identity is stable
+for the observed account/post pair. Each observation is validated before any
+of its projections is published.
+
+Canonical generated Target bindings are received through the maintained Router.
+Set the actor to ~fediwatch~ and ~options.typ~ to ~Domain~ for a timeline or ~User~
+for an account lookup. ~options.auth~ supplies the API token; ~options.ua~ can
+set the timeline user agent. Tokens are passed in the HTTP authorization header.
+
+** Build and run
 #+begin_src shell
-nimble install
+nix build
+./result/bin/fediWatch --apiAddress=tcp://127.0.0.1:6001 --subAddress=tcp://127.0.0.1:6000
 #+end_src
-If you just want to run it standalone without docker (not reconmended).
+
+Native Nim 2 installations can use ~nimble install~ with OpenSSL and ZeroMQ.
+~FEDIWATCH_LOG~ sets the log path (default ~fediWatch.log~), and
+~FEDIWATCH_LOG_LEVEL~ selects a Nim log level, such as ~lvlInfo~ or ~lvlError~.
+The tested Nix package carries its HTTPS trust bundle. ~SSL_CERT_FILE~ can supply
+a deployment CA bundle while retaining peer certificate validation.
+
 #+begin_src shell
-nimble install https://github.com/lost-rob0t/fediWatch
+docker build -t fediwatch .
+docker run --init --rm --network=host fediwatch
 #+end_src
 
-Via docker
+The container builds the same fully tested Nix package and includes its runtime
+closure. Configure broker addresses with command-line arguments for deployment.
+
+** Validation and releases
 #+begin_src shell
-docker build . -t fediWatch
+python3 scripts/sync-starintel-schema.py
+nix flake check -L
 #+end_src
 
-Edit the example-.env values that configure the bot
-you can pass them in like this
-#+begin_src shell
-sudo docker run --env-file <path to env file> fediwatch:latest
-#+end_src
+The upstream check verifies the immutable StarLang release. The full Nix gate
+builds the actor and tests both native and installed binaries against an actual
+local broker and HTTPS Mastodon endpoint: generated target routing, account
+lookup/authentication/cache, timeline production, reference integrity, stable
+identity, lossless raw input, duplicate suppression and invalid observation
+rejection. Production endpoints are not contacted by these checks.
 
+Nim 2.2.12 gives the ULID dependency's ~pkg/random~ and HTTP's ~std/random~ the
+same generated C filename. The Nix build renames only the pinned ULID random
+module in its temporary build tree; its implementation and random algorithm
+are unchanged. OpenSSL is linked explicitly for the SSL-enabled build.
 
-Enviroment settings to set
-+ FEDIWATCH_LOG defaults to $appname.$y$MM$dd.log
-+ FEDIWATCH_LOG_LEVEL defaults to lvlInfo
-  Note when setting the level it has to start with lvl{name} so error would be lvlError, lvlWarn, ect
-
-command line args
-
-+ ~-h~ open help
-+ ~-s~ set the router subscriber port, should be 6000 by default
-+ ~-a~ set the router api port, should be 6001 by default
-
-
-
-* TODO [1/4]
-+ [X] user scraping
-+ [ ] account watching
-+ [ ] Let router url be set by env
-+ [ ] Let log level and format be set by args
+Update source releases using ~scripts/sync-starintel-schema.py --commit <full-commit>~
+and repin the maintained runtimes to the same release.
