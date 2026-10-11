@@ -25,8 +25,15 @@ for an account lookup. ~options.auth~ supplies the API token; ~options.ua~ can
 set the timeline user agent. Tokens are passed in the HTTP authorization header.
 
 ** Build and run
+The locked producer currently supports ~x86_64-linux~. Explicit apps ~default~
+and ~fediWatch~ run the document actor; ~raw~ runs ~fediWatchRaw~ from the
+existing independent raw package. Downstream consumers should pin this producer
+to an immutable revision and use its packages/apps.
+
 #+begin_src shell
 nix build
+nix run .#default -- --help
+nix run .#raw -- --raw-config /absolute/path/to/raw.json
 ./result/bin/fediWatch --apiAddress=tcp://127.0.0.1:6001 --subAddress=tcp://127.0.0.1:6000
 #+end_src
 
@@ -48,6 +55,7 @@ closure. Configure broker addresses with command-line arguments for deployment.
 #+begin_src shell
 python3 scripts/sync-starintel-schema.py
 nix flake check -L
+bash tests/flake-apps.sh
 #+end_src
 
 The upstream check verifies the immutable StarLang release. The full Nix gate

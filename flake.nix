@@ -74,6 +74,11 @@
       };
     in {
       packages.${system} = { default = actor; inherit raw; };
+      apps.${system} = {
+        default = self.apps.${system}.fediWatch;
+        fediWatch = { type = "app"; program = "${actor}/bin/fediWatch"; };
+        raw = { type = "app"; program = "${raw}/bin/fediWatchRaw"; };
+      };
       checks.${system} = { default = actor; inherit raw; };
       devShells.${system}.default = pkgs.mkShell {
         packages = [ pkgs.nim pkgs.nimble python ];

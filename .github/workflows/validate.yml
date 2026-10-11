@@ -10,11 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@v31
       - name: Verify immutable upstream release
         run: python3 scripts/sync-starintel-schema.py
       - name: Build and test installed actor and live HTTP/ZeroMQ pipeline
         run: nix flake check -L
+      - name: Run flake apps outside the checkout
+        run: bash tests/flake-apps.sh
   container:
     runs-on: ubuntu-latest
     steps:
