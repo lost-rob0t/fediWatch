@@ -1,0 +1,12 @@
+{
+  "output": "~/fediwatch-raw",
+  "targets": ["mastodon.social"],
+  "duration_seconds": 300,
+  "max_requests": 100,
+  "poll_seconds": 30,
+  "timeout_seconds": 10,
+  "limit": 40,
+  "local": true,
+  "max_response_bytes": 8388608,
+  "max_archive_bytes": 268435456
+}

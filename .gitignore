@@ -1,1 +1,5 @@
-/.env
+result
+__pycache__/
+*.log
+fediWatch
+router
