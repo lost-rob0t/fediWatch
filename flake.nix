@@ -72,10 +72,8 @@
         '';
       };
     in {
-      packages.${system}.default = actor;
-      packages.${system}.raw = raw;
-      checks.${system}.default = actor;
-      checks.${system}.raw = raw;
+      packages.${system} = { default = actor; inherit raw; };
+      checks.${system} = { default = actor; inherit raw; };
       devShells.${system}.default = pkgs.mkShell {
         packages = [ pkgs.nim pkgs.nimble python ];
         LD_LIBRARY_PATH = libraries;

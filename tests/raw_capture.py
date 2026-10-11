@@ -57,7 +57,7 @@ class Fixture:
     def __exit__(self, *args): self.close()
 
 
-def invoke(root, fixture, **options):
+def invoke(root, fixture, runner_cwd=None, **options):
     config = {'output': str(root/'out'), 'targets': [fixture.origin],
               'duration_seconds': 2, 'max_requests': 1, 'poll_seconds': 1,
               'timeout_seconds': 1, 'max_response_bytes': 1024,
@@ -65,7 +65,7 @@ def invoke(root, fixture, **options):
     config.update(options)
     path = root/'config.json'
     path.write_text(json.dumps(config))
-    run = subprocess.run([binary, '--raw-config', str(path)], capture_output=True, text=True, timeout=15)
+    run = subprocess.run([binary, '--raw-config', str(path)], capture_output=True, text=True, timeout=15, cwd=runner_cwd)
     assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
     return sorted((json.loads(p.read_text()) for p in (root/'out'/'captures').glob('*.json')), key=lambda r:r['sequence'])
 
@@ -184,6 +184,15 @@ def test_unsupported_transfer_framing():
             verify(root,record,b'')
 
 
+def test_output_outside_current_checkout():
+    with Fixture([(200,b'[]',{})]) as f, tempfile.TemporaryDirectory() as d:
+        root=Path(d)
+        checkout=root/'checkout';checkout.mkdir();(checkout/'.git').mkdir()
+        (checkout/'.git/HEAD').write_text('ref: refs/heads/main')
+        records=invoke(root,f,runner_cwd=checkout)
+        assert len(records)==1 and records[0]['complete']
+
+
 def test_config_and_output_safety():
     with Fixture([(200,b'[]',{})]) as f, tempfile.TemporaryDirectory() as d:
         root=Path(d)
@@ -208,6 +217,6 @@ def test_config_and_output_safety():
         assert f.paths==[]
 
 for test in [test_body_and_resume,test_malformed_and_invalid,test_http_errors_and_cooldown,
-             test_partial_and_limit,test_redirect_and_fairness,test_slow_request_deadline,test_resumed_budget_fairness,test_unsupported_transfer_framing,test_config_and_output_safety]:
+             test_partial_and_limit,test_redirect_and_fairness,test_slow_request_deadline,test_resumed_budget_fairness,test_unsupported_transfer_framing,test_output_outside_current_checkout,test_config_and_output_safety]:
     test();print(test.__name__+': PASS',flush=True)
 print('raw full-response fixture: PASS')

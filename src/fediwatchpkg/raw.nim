@@ -113,12 +113,12 @@ proc readConfig(path: string): RawConfig =
 proc safeRoot(path: string): string =
   result = absolutePath(expandTilde(path)).normalizedPath()
   var ancestor = result
-  while true:
+  while ancestor.len > 0:
     if symlinkExists(ancestor): fail("raw output must not use symlinks")
     if fileExists(ancestor / ".git" / "HEAD") or fileExists(ancestor / ".git"):
       fail("raw output must be outside Git checkouts")
     let parent = ancestor.parentDir
-    if parent == ancestor or ancestor.len == 0: break
+    if parent == ancestor: break
     ancestor = parent
   if result == "/": fail("raw output cannot be filesystem root")
 
