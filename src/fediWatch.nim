@@ -203,6 +203,3 @@ when isMainModule:
   if getEnv("FEDIWATCH_RAW_CONFIG").len > 0 or (paramCount() > 0 and paramStr(1) == "--raw-config"):
     quit(rawMain())
   dispatch main
-
-
-
