@@ -1,0 +1,29 @@
+name: Raw response capture
+on:
+  pull_request:
+  push:
+    branches: [master, 'codex/**']
+permissions:
+  contents: read
+jobs:
+  raw-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: lost-rob0t/fedi
+          ref: d6a3d7f7674e35677f5a529f9b0e8e332b198602
+          path: .raw-deps/fedi
+      - name: Install verified official Nim compiler
+        run: |
+          curl -fsSLO https://nim-lang.org/download/nim-2.2.12-linux_x64.tar.xz
+          echo '7df1611449a6842af69322aa2c1206942982650a5f6bc0d37bc8ec109932f638  nim-2.2.12-linux_x64.tar.xz' | sha256sum -c -
+          tar -xf nim-2.2.12-linux_x64.tar.xz
+          echo "$PWD/nim-2.2.12/bin" >> "$GITHUB_PATH"
+      - name: Compile raw-only production and isolated fixture executables
+        run: |
+          nim c -d:ssl --noNimblePath --path:.raw-deps/fedi/src --nimcache:"$RUNNER_TEMP/raw-cache" --out:fediWatchRaw src/fediWatchRaw.nim
+          nim c -d:ssl -d:rawFixture --noNimblePath --path:.raw-deps/fedi/src --nimcache:"$RUNNER_TEMP/fixture-cache" --out:raw-fixture src/fediWatchRaw.nim
+      - name: Exercise actual raw HTTP capture, replay and bounded failures
+        run: python3 tests/raw_capture.py ./raw-fixture ./fediWatchRaw

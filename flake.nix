@@ -14,6 +14,28 @@
       python = pkgs.python3.withPackages (p: [p.pyzmq]);
       paths = "--noNimblePath --path:src --path:${starintel-doc}/src --path:${star-router}/src --path:${fedi}/src --path:${lrucache}/src --path:${star-router.inputs.cligen} --path:${star-router.inputs.zmq} --path:$TMPDIR/ulid-deps";
       libraries = pkgs.lib.makeLibraryPath [ pkgs.pcre pkgs.zeromq pkgs.openssl ];
+      raw = pkgs.stdenv.mkDerivation {
+        pname = "fediWatchRaw";
+        version = "0.1.0";
+        src = self;
+        nativeBuildInputs = [ pkgs.nim pkgs.python3 pkgs.makeWrapper ];
+        buildInputs = [ pkgs.openssl ];
+        buildPhase = ''
+          nim c -d:ssl --noNimblePath --path:src --path:${fedi}/src --nimcache:"$TMPDIR/raw-cache" --out:fediWatchRaw src/fediWatchRaw.nim
+          nim c -d:ssl -d:rawFixture --noNimblePath --path:src --path:${fedi}/src --nimcache:"$TMPDIR/fixture-cache" --out:raw-fixture src/fediWatchRaw.nim
+        '';
+        doCheck = true;
+        checkPhase = ''
+          export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}
+          python3 tests/raw_capture.py ./raw-fixture ./fediWatchRaw
+        '';
+        installPhase = ''
+          mkdir -p "$out/bin"
+          install -m755 fediWatchRaw "$out/bin/fediWatchRaw"
+          wrapProgram "$out/bin/fediWatchRaw" --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.openssl ]} \
+            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+        '';
+      };
       actor = pkgs.stdenv.mkDerivation {
         pname = "fediWatch";
         version = "0.3.0";
@@ -51,10 +73,13 @@
       };
     in {
       packages.${system}.default = actor;
+      packages.${system}.raw = raw;
       checks.${system}.default = actor;
+      checks.${system}.raw = raw;
       devShells.${system}.default = pkgs.mkShell {
         packages = [ pkgs.nim pkgs.nimble python ];
         LD_LIBRARY_PATH = libraries;
       };
     };
 }
+

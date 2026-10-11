@@ -15,7 +15,8 @@ import cligen
 import md5
 import std/[logging, options, net]
 import fediwatchpkg/documents
-from os import getEnv
+from os import getEnv, paramCount, paramStr
+import fediwatchpkg/raw
 type
   FediWatch = ref object
     client: AsyncFediClient
@@ -199,6 +200,9 @@ proc main(apiAddress: string = "tcp://127.0.0.1:6001", subAddress: string = "tcp
   waitFor client.userLoop(log)
 
 when isMainModule:
+  if getEnv("FEDIWATCH_RAW_CONFIG").len > 0 or (paramCount() > 0 and paramStr(1) == "--raw-config"):
+    quit(rawMain())
   dispatch main
+
 
 

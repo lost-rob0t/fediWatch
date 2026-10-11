@@ -64,3 +64,11 @@ are unchanged. OpenSSL is linked explicitly for the SSL-enabled build.
 
 Update source releases using ~scripts/sync-starintel-schema.py --commit <full-commit>~
 and repin the maintained runtimes to the same release.
+
+
+** Local full-response capture
+Use ~fediWatch --raw-config config/raw.example.json~ to capture complete public
+API responses locally before any parsing. This mode does not connect to the
+broker or construct documents. ~nix build .#raw~ provides the dependency-light
+~fediWatchRaw~ executable for the same mode. See [[file:RAW.md][RAW.md]] for limits,
+raw bytes, source metadata, crash/resume behavior and native/Termux builds.
